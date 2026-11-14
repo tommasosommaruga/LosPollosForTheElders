@@ -148,7 +148,27 @@ git pull
 
 Requires pollen [`reachy_mini_conversation_app`](https://github.com/pollen-robotics/reachy_mini_conversation_app) on PATH as `reachy-mini-conversation-app` (or set `REACHY_CONVERSATION_CMD`).
 
-Voice tools: `schedule_medicine` · `list_medicines` · `check_due_medicines` · `dispense_medicine` · `mark_dose_taken`
+Voice tools: `schedule_medicine` · `update_medicine_schedule` · `delete_medicine_schedule` · `list_medicines` · `check_due_medicines` · `dispense_medicine` · `mark_dose_taken`
+
+**Recommended (any OS, with prompt-injection protection):**
+
+```bash
+# terminal 1
+cd apps/medicine_buddy && medicine-buddy serve --host 127.0.0.1 --port 8787 --dry-run --voice-guard
+# terminal 2 (conversation app's python)
+python integrations/reachy_conversation/run_conversation.py --host <robot-ip>
+```
+
+`run_conversation.py` loads the tools/profile, targets the robot by IP, and forwards the person's
+speech transcripts to `POST /voice/heard`. With `--voice-guard`, add/update/delete only go through if
+the person named that medicine out loud recently, and delete/dispense also need a spoken "yes" after
+Reachy asked — so instructions hidden in web results, camera images or memory can't change medicines.
+`safe_web_search` gives Reachy internet search with cleaned, untrusted-labelled snippets (no links,
+no page fetching). Blocked attempts show on the status page.
+
+Medicine names are restricted to [`medicine_catalog.json`](apps/medicine_buddy/medicine_buddy/medicine_catalog.json)
+(with aliases and spelling-tolerant matching for speech-to-text slips); unknown names are refused with suggestions.
+Status page: http://127.0.0.1:8787/
 
 More: [`integrations/reachy_conversation/README.md`](integrations/reachy_conversation/README.md)
 
@@ -160,10 +180,16 @@ Default: `http://127.0.0.1:8787`
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/` | **Status page** (open in a browser): schedules, allowed medicines, due now, dose log. Auto-refreshes. |
 | GET | `/health` | Liveness |
-| GET | `/medicines` | List medicines + schedules |
-| GET | `/due` | Schedules due this minute |
-| POST | `/schedules` | `{name, weekdays, time}` |
+| GET | `/medicines` | List medicines + active schedules (+ `speak_hint`) |
+| GET | `/catalog` | Allowed medicine names |
+| GET | `/due` | Doses due now (15 min before → 60 min after, not yet taken/skipped) |
+| POST | `/schedules` | `{name, weekdays, time}` — name must match the catalog; read back + confirmed |
+| POST | `/schedules/update` | `{name, [time], [new_time], [new_weekdays]}` — change a schedule; read back + confirmed |
+| POST | `/schedules/delete` | `{name, confirmed, [time], [all]}` — stop reminders (soft delete, history kept) |
+| POST | `/voice/heard` | `{text}` — person's speech from the launcher; **loopback only**, no AI tool calls it |
+| GET | `/security` | Voice guard status + recently blocked actions |
 | POST | `/doses/run` | `{medicine_name, confirmed, stop_after_placed?}` |
 | POST | `/doses/adherence` | `{medicine_name, taken}` |
 | GET | `/medicines/{id}/events` | Dose transition log |

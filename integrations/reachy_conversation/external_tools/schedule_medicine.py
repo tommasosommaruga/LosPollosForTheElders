@@ -25,9 +25,12 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
 class ScheduleMedicine(Tool):
     name = "schedule_medicine"
     description = (
-        "Save a medicine and when the person should take it. "
-        "Use when they say they take a medicine on certain days/times. "
-        "weekdays can be 'daily' or names like 'Mon,Wed,Fri'. time is HH:MM."
+        "Save a NEW medicine reminder. Use when they say they take a medicine on certain days/times. "
+        "Only medicines on the allowed list are accepted; pass the name as the person said it and the "
+        "server recognizes it (or returns suggestions to ask about). "
+        "weekdays: 'daily', 'weekdays', 'weekends' or names like 'Mon,Wed,Fri'. time: '09:00' or '9 AM'. "
+        "Always read the returned speak_hint aloud: it confirms the reminder was set up correctly. "
+        "To change or remove an existing reminder use update_medicine_schedule / delete_medicine_schedule."
     )
     parameters_schema = {
         "type": "object",

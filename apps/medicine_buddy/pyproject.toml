@@ -20,5 +20,8 @@ medicine-buddy = "medicine_buddy.cli:main"
 where = ["."]
 include = ["medicine_buddy*"]
 
+[tool.setuptools.package-data]
+medicine_buddy = ["medicine_catalog.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

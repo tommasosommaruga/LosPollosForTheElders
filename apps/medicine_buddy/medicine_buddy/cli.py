@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from medicine_buddy.config import AppConfig
-from medicine_buddy.db import Database
+from medicine_buddy.db import DEFAULT_DB_PATH, Database
 from medicine_buddy.dry_run import ConsoleBuddy, FakeAdherence, FakeArm, FakeVision
 from medicine_buddy.orchestrator import DoseStateMachine
 from medicine_buddy.scheduler import find_due_doses
@@ -28,7 +28,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
         return 2
 
     config = AppConfig(dry_run=True, adherence_timeout_seconds=args.timeout)
-    db_path = Path(args.db) if args.db else Path("data") / "medicine_buddy.db"
+    db_path = Path(args.db) if args.db else DEFAULT_DB_PATH
     machine = _build_dry_run_stack(db_path, config)
     db = machine.db
     buddy = machine.buddy
@@ -59,7 +59,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
 
 def cmd_check_due(args: argparse.Namespace) -> int:
-    db = Database(Path(args.db) if args.db else Path("data") / "medicine_buddy.db")
+    db = Database(Path(args.db) if args.db else DEFAULT_DB_PATH)
     due = find_due_doses(db)
     if not due:
         print("No doses due this minute.")
@@ -77,8 +77,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from medicine_buddy.api import serve
 
     config = AppConfig(dry_run=bool(args.dry_run))
-    db_path = Path(args.db) if args.db else Path("data") / "medicine_buddy.db"
-    serve(host=args.host, port=args.port, db_path=db_path, config=config)
+    db_path = Path(args.db) if args.db else DEFAULT_DB_PATH
+    serve(host=args.host, port=args.port, db_path=db_path, config=config,
+          voice_guard=bool(args.voice_guard))
     return 0
 
 
@@ -112,6 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Use fake arm/vision (default true)",
+    )
+    serve_cmd.add_argument(
+        "--voice-guard",
+        action="store_true",
+        default=False,
+        help="Only allow medicine changes the person actually asked for out loud "
+        "(prompt-injection protection; needs integrations/reachy_conversation/run_conversation.py)",
     )
     serve_cmd.set_defaults(func=cmd_serve)
 

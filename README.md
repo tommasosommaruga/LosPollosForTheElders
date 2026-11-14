@@ -197,7 +197,7 @@ Make sure the app is **not** also running on the robot - only one app can drive 
 ### Other commands
 
 ```bash
-pytest                                                   # 266 tests (in apps/medicine_buddy)
+pytest                                                   # 278 tests (in apps/medicine_buddy)
 medicine-buddy serve --dry-run --voice-guard             # only the API + pages, no robot
 printf 'yes\nyes\nyes\n' | medicine-buddy demo --dry-run # console demo of the dose pipeline
 reachy-mini-app-assistant check apps/medicine_buddy      # validate the app package
@@ -217,7 +217,7 @@ reachy-mini-app-assistant check apps/medicine_buddy      # validate the app pack
 
 - **Reachy reminds by itself.** A background check runs every 30 seconds. When a dose is due, Reachy
   speaks up (through the conversation app) and asks whether to bring it or whether it was already taken.
-  It repeats every 10 minutes, up to 3 times, never while someone is talking to it. If nobody answers
+  It repeats every 10 minutes, up to 3 times. It waits until Reachy is idle: never while someone is talking to it, while Reachy is thinking or speaking, or while a tool call (e.g. a web search) is still running. If nobody answers
   within an hour the dose is recorded as **Missed** (visible on the dashboard). Switch off with
   `MEDICINE_BUDDY_REMINDERS=0`.
 - **Set the time zone once** on the Family settings page ("Clock & time zone", one click for your device's zone)

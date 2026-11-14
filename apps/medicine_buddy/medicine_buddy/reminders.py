@@ -202,4 +202,5 @@ class ReminderLoop:
             ],
             "last_spoken": self.last_spoken.strftime("%H:%M:%S") if self.last_spoken else None,
             "last_error": self.last_error,
+            "conversation": self.speak.status() if hasattr(self.speak, "status") else None,
         }

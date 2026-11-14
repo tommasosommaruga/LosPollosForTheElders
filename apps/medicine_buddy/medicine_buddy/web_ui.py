@@ -376,7 +376,7 @@ async function refresh() {{
   kv("data", d.data);
   const rm = d.reminders || {{}};
   kv("rem", {{running: !!rm.running, check_every: rm.check_every_s ? rm.check_every_s + " s" : null, last_spoken: rm.last_spoken,
-              last_error: rm.last_error, waiting_for_answer: (rm.waiting_for_answer || []).map(w => w.medicine + (w.person ? " (" + w.person + ")" : "") + " x" + w.reminders_spoken).join(", ") || "-"}});
+              last_error: rm.last_error, reachy: rm.conversation ? (rm.conversation.watching ? (rm.conversation.state || "idle") + (rm.conversation.pending_tools ? " (" + rm.conversation.pending_tools + " tool call)" : "") : "not watching") : null, waiting_for_answer: (rm.waiting_for_answer || []).map(w => w.medicine + (w.person ? " (" + w.person + ")" : "") + " x" + w.reminders_spoken).join(", ") || "-"}});
   rows("unlocked", d.voice_guard.unlocked_people.map(u => [td(u.name), td(mmss(u.seconds_left))]), 2, "Nobody unlocked right now.");
   rows("pending", d.voice_guard.open_questions.map(q => [td(q.action), td(q.seconds_left + " s")]), 2, "No open questions.");
   rows("blocked", d.voice_guard.blocked.map(b => [td(b.at, "muted"), td(b.action), td(b.reason)]), 3, "Nothing blocked.");

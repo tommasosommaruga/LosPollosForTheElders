@@ -201,7 +201,7 @@ def rpc_server():
     from reachy_mini.io.jsonrpc import JsonRpcError
 
     rpc, app = JsonRpcServer(), FastAPI()
-    state = {"connected": True, "said": []}
+    state = {"connected": True, "said": [], "rpc": rpc}
 
     @rpc.method("conversation.say")
     async def say(params):
@@ -239,3 +239,148 @@ def test_speaker_reports_not_ready(rpc_server) -> None:
 
 def test_speaker_survives_a_dead_server() -> None:
     assert make_rpc_speaker(f"ws://127.0.0.1:{_free_port()}/rpc")("hello") is False
+
+
+# ---- Reachy busy -> do NOT speak (the "function call outputs are pending" error from the robot's log)
+
+from medicine_buddy.speaker import RpcSpeaker  # noqa: E402
+
+
+def _wait(cond, timeout: float = 3.0) -> bool:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+@pytest.fixture
+def watcher(rpc_server):
+    url, state = rpc_server
+    sp = RpcSpeaker(url, idle_grace=0.15, stale_after=0.8)
+    sp.start()
+    assert _wait(lambda: sp.connected)
+    time.sleep(0.2)               # let the server register the new peer before it broadcasts
+    yield sp, state
+    sp.stop()
+
+
+def test_speaks_when_idle(watcher) -> None:
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    assert _wait(lambda: sp.state == "ready")
+    assert _wait(sp.is_idle)
+    assert sp("time for your aspirin") is True and state["said"] == ["time for your aspirin"]
+
+
+@pytest.mark.parametrize("busy", ["thinking", "speaking", "listening"])
+def test_does_not_speak_while_reachy_is_busy(watcher, busy: str) -> None:
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": busy})
+    assert _wait(lambda: sp.state == busy)
+    assert sp("reminder") is False and state["said"] == []        # nothing was even sent
+
+
+def test_does_not_speak_while_a_tool_call_is_pending(watcher) -> None:
+    """The robot's error: a reply requested while a tool call still waits for its result."""
+    sp, state = watcher
+    rpc = state["rpc"]
+    rpc.broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    rpc.broadcast_threadsafe("conversation.activity", {"reason": "tool_call_received"})
+    assert _wait(lambda: sp.pending_tools == 1)
+    time.sleep(0.3)                                              # long past idle_grace, but the tool is still running
+    assert sp.is_idle() is False and sp("reminder") is False and state["said"] == []
+    rpc.broadcast_threadsafe("conversation.activity", {"reason": "tool_result_ready"})
+    assert _wait(lambda: sp.pending_tools == 0)
+    rpc.broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    assert _wait(sp.is_idle) and sp("reminder") is True
+
+
+def test_idle_rules_with_a_fake_clock() -> None:
+    import json as _json
+    c = Clock()
+    sp = RpcSpeaker("ws://unused", idle_grace=4, stale_after=45, clock=c)
+
+    def say(method: str, **params) -> None:
+        sp._on_message(_json.dumps({"jsonrpc": "2.0", "method": method, "params": params}))
+
+    say("conversation.turn", state="ready")
+    assert sp.is_idle() is False                         # just finished: give it a moment
+    c.t += 4.1
+    assert sp.is_idle() is True
+    say("conversation.activity", reason="tool_call_received")
+    c.t += 20
+    assert sp.is_idle() is False and sp.pending_tools == 1   # a tool is still running
+    say("conversation.activity", reason="tool_call_received")  # parallel tool calls
+    say("conversation.activity", reason="tool_result_ready")
+    assert sp.pending_tools == 1
+    say("conversation.activity", reason="tool_result_ready")
+    say("conversation.turn", state="speaking")
+    assert sp.is_idle() is False
+    say("conversation.turn", state="ready")
+    assert sp.pending_tools == 0                         # a finished reply resets any drift
+    c.t += 4.1
+    assert sp.is_idle() is True
+    say("conversation.turn", state="thinking")
+    c.t += 44
+    assert sp.is_idle() is False
+    c.t += 2
+    assert sp.is_idle() is True                          # stuck for 46 s: do not wait forever
+
+
+def test_garbage_messages_are_ignored() -> None:
+    sp = RpcSpeaker("ws://unused")
+    for raw in ("not json", "[]", "null", '{"method": "something.else"}', bytes([255, 254])):
+        sp._on_message(raw)
+    assert sp.state is None and sp.pending_tools == 0
+
+
+def test_a_stuck_busy_state_does_not_block_reminders_forever(watcher) -> None:
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "thinking"})
+    assert _wait(lambda: sp.state == "thinking")
+    assert sp.is_idle() is False
+    assert _wait(sp.is_idle, timeout=3)                          # stale_after = 0.8 s: treated as idle
+    assert sp("reminder") is True
+
+
+def test_after_speaking_it_waits_for_the_apps_own_events(watcher) -> None:
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    assert _wait(lambda: sp.state == "ready" and sp.is_idle())
+    assert sp("first") is True
+    assert sp("second") is False and state["said"] == ["first"]   # busy until Reachy has finished the first one
+
+
+def test_refused_say_does_not_mark_busy(watcher) -> None:
+    sp, state = watcher
+    state["connected"] = False                                    # "no active session"
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    assert _wait(lambda: sp.state == "ready" and sp.is_idle())
+    assert sp("hello") is False
+    state["connected"] = True
+    assert sp("hello") is True                                    # retried straight away, nothing was marked busy
+
+
+def test_unreachable_app_is_not_a_crash() -> None:
+    sp = RpcSpeaker(f"ws://127.0.0.1:{_free_port()}/rpc", idle_grace=0.0)
+    sp.start()
+    time.sleep(0.3)
+    assert sp.connected is False and sp.is_idle() is True         # unknown state: allowed, but the call itself fails
+    assert sp("hello") is False
+    sp.stop()
+
+
+def test_reminder_loop_retries_when_reachy_is_busy(parts, watcher) -> None:
+    svc, loop, _, _ = parts
+    sp, state = watcher
+    loop.speak = sp
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "thinking"})
+    assert _wait(lambda: sp.state == "thinking")
+    assert loop.tick(at(9, 0)) == [] and state["said"] == []      # busy: nothing sent, nothing counted
+    assert loop.status()["waiting_for_answer"] == []
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    assert _wait(lambda: sp.state == "ready" and sp.is_idle())
+    assert len(loop.tick(at(9, 1))) == 1 and len(state["said"]) == 1
+    assert loop.status()["conversation"]["watching"] is True

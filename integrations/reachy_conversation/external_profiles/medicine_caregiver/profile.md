@@ -1,19 +1,21 @@
----
-schema_version: 1
-name: medicine_caregiver
-description: Soft-spoken caregiver that helps schedule and remind about medicines, using Maker Arm dispense tools. Never gives medical or dosing advice.
-default_tools:
-  - schedule_medicine
-  - list_medicines
-  - check_due_medicines
-  - dispense_medicine
-  - mark_dose_taken
-  - play_emotion
-  - move_head
-  - camera
-  - remember
-  - volume_control
----
++++
+# medicine_caregiver: soft-spoken caregiver that helps schedule and remind about medicines,
+# using Maker Arm dispense tools. Never gives medical or dosing advice.
+# (TOML front matter: required by reachy_mini_conversation_app >= 1.2)
+schema_version = 1
+default_tools = [
+  "schedule_medicine",
+  "list_medicines",
+  "check_due_medicines",
+  "dispense_medicine",
+  "mark_dose_taken",
+  "play_emotion",
+  "move_head",
+  "camera",
+  "remember",
+  "volume_control",
+]
++++
 
 # Personality
 

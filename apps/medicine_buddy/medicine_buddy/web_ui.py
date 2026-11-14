@@ -222,6 +222,7 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         "suggest": "settings_suggest",
         "register": "settings_register",
         "passphrase": "settings_change_passphrase",
+        "timezone": "settings_timezone",
     }
 
     @app.post(PREFIX + "/settings/{name}")
@@ -340,6 +341,7 @@ def _debug_page(csrf: str, nav: str) -> str:
   <section><h2>App</h2><div class=kv id=app></div></section>
   <section><h2>Voice guard</h2><div class=kv id=guard></div></section>
   <section><h2>Data</h2><div class=kv id=data></div></section>
+  <section><h2>Reminders</h2><div class=kv id=rem></div></section>
 </div>
 <section><h2>Unlocked by spoken passphrase</h2><table><thead><tr><th>Person</th><th>Still valid</th></tr></thead><tbody id=unlocked></tbody></table></section>
 <section><h2>Open confirmation questions</h2><table><thead><tr><th>Action</th><th>Expires in</th></tr></thead><tbody id=pending></tbody></table></section>
@@ -372,6 +374,9 @@ async function refresh() {{
   kv("guard", {{enabled: d.voice_guard.enabled, utterances_heard: d.voice_guard.utterances_heard,
                 last_speech: d.voice_guard.seconds_since_last_speech == null ? "never" : d.voice_guard.seconds_since_last_speech + " s ago"}});
   kv("data", d.data);
+  const rm = d.reminders || {{}};
+  kv("rem", {{running: !!rm.running, check_every: rm.check_every_s ? rm.check_every_s + " s" : null, last_spoken: rm.last_spoken,
+              last_error: rm.last_error, waiting_for_answer: (rm.waiting_for_answer || []).map(w => w.medicine + (w.person ? " (" + w.person + ")" : "") + " x" + w.reminders_spoken).join(", ") || "-"}});
   rows("unlocked", d.voice_guard.unlocked_people.map(u => [td(u.name), td(mmss(u.seconds_left))]), 2, "Nobody unlocked right now.");
   rows("pending", d.voice_guard.open_questions.map(q => [td(q.action), td(q.seconds_left + " s")]), 2, "No open questions.");
   rows("blocked", d.voice_guard.blocked.map(b => [td(b.at, "muted"), td(b.action), td(b.reason)]), 3, "Nothing blocked.");

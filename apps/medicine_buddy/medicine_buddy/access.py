@@ -38,6 +38,7 @@ from medicine_buddy.auth import (
     validate_new_passphrase,
 )
 from medicine_buddy.db import MEMORY_KINDS, ROLES, Memory, Person
+from medicine_buddy.names import name_key, strip_titles
 
 MAX_MEMORY_CHARS = 6000
 MAX_RECALL = 5
@@ -75,17 +76,20 @@ class PeopleAccessMixin:
         exact = self.db.get_person_by_name(text)
         if exact:
             return exact, None
-        by_norm = {normalize_phrase(p.name): p for p in people}
-        norm = normalize_phrase(text)
-        # "grandpa mario" -> "Mario": accept if exactly one registered name is a whole word in it
-        contained = [p for n, p in by_norm.items() if n and re.search(rf"\b{re.escape(n)}\b", norm)]
-        if len(contained) == 1:
-            return contained[0], None
+        key = name_key(text)
+        core = strip_titles(key)                      # "grandpa Mario" / "nonna Rosa" -> "mario" / "rosa"
+        if core and core != key:
+            titled = self.db.get_person_by_name(core)
+            if titled:
+                return titled, None
+        # NOTE: a longer name such as "Mario Bianchi" is NOT mapped onto the registered "Mario":
+        # a different person with the same first name must never act on someone else's data.
         if not for_change:
             if not strict:
-                close = difflib.get_close_matches(norm, list(by_norm), n=2, cutoff=0.75)
+                by_key = {name_key(p.name): p for p in people}
+                close = difflib.get_close_matches(core or key, list(by_key), n=2, cutoff=0.75)
                 if len(close) == 1:
-                    return by_norm[close[0]], None
+                    return by_key[close[0]], None
             names = ", ".join(p.name for p in people) or "nobody yet"
             return None, {"error": f"unknown person: {text!r}", "known_people": [p.name for p in people],
                           "speak_hint": f"I don't know anyone called {text}. I know: {names}."}
@@ -147,6 +151,9 @@ class PeopleAccessMixin:
         repeat = str(body.get("passphrase_repeat") or "")
         if not name:
             return {"error": "name is required", "speak_hint": "What is the person's name?"}
+        if not name_key(name) or len(name) > 60:
+            return {"error": "the name must contain letters and be at most 60 characters",
+                    "speak_hint": "Please tell me the person's name again, in plain words."}
         if role not in ROLES:
             return {"error": f"role must be one of {ROLES}"}
         if role == "caregiver" and self.db.has_caregiver():
@@ -178,13 +185,20 @@ class PeopleAccessMixin:
                     "speak_hint": "The two passphrases didn't match. Let's try again: say it twice."}
 
         with self._lock:
-            if self.db.get_person_by_name(name):
+            existing = self.db.get_person_by_name(name)
+            if existing:
                 return {"error": f"{name} is already registered",
-                        "speak_hint": f"{name} is already registered."}
+                        "speak_hint": (f"{existing.name} is already registered, so I won't register that name "
+                                       "again. If you are a different person with the same name, please use a "
+                                       "name that tells you apart, like your full name. To change a passphrase, "
+                                       "use the Family settings page.")}
             if any(p.secret.matches(phrase) for p in self.db.list_people()):
                 return {"error": "passphrase already in use",
                         "speak_hint": "That passphrase is already used by someone else. Please choose another."}
-            person = self.db.add_person(name, role, make_secret(phrase))
+            try:
+                person = self.db.add_person(name, role, make_secret(phrase))
+            except ValueError as exc:      # lost a race with another registration of the same name
+                return {"error": str(exc), "speak_hint": "That name was just registered by someone else."}
         self.guard.reidentify()
         return {
             "status": "ok",

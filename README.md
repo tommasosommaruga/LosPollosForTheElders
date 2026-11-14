@@ -197,7 +197,7 @@ Make sure the app is **not** also running on the robot - only one app can drive 
 ### Other commands
 
 ```bash
-pytest                                                   # 178 tests (in apps/medicine_buddy)
+pytest                                                   # 266 tests (in apps/medicine_buddy)
 medicine-buddy serve --dry-run --voice-guard             # only the API + pages, no robot
 printf 'yes\nyes\nyes\n' | medicine-buddy demo --dry-run # console demo of the dose pipeline
 reachy-mini-app-assistant check apps/medicine_buddy      # validate the app package
@@ -212,6 +212,21 @@ reachy-mini-app-assistant check apps/medicine_buddy      # validate the app pack
 - Tell a story or recipe - Reachy asks whether to **save it in your memories**; later the grandchildren
   can ask *"Tell me a story Grandpa Mario told you"*.
 - *"What's the weather in Geneva?"* - safe web search.
+
+### Reminders, time zone and demo mode
+
+- **Reachy reminds by itself.** A background check runs every 30 seconds. When a dose is due, Reachy
+  speaks up (through the conversation app) and asks whether to bring it or whether it was already taken.
+  It repeats every 10 minutes, up to 3 times, never while someone is talking to it. If nobody answers
+  within an hour the dose is recorded as **Missed** (visible on the dashboard). Switch off with
+  `MEDICINE_BUDDY_REMINDERS=0`.
+- **Set the time zone once** on the Family settings page ("Clock & time zone", one click for your device's zone)
+  or with `MEDICINE_BUDDY_TZ=Europe/Zurich`. The robot's own clock is usually UTC, so without this a 9 AM
+  reminder would fire at the wrong hour.
+- **"I took it" works without the arm**: say it any time and the dose is closed as Taken (or Missed).
+- **Demo mode:** until the Maker Arm is wired in, dispensing is simulated. Reachy says so
+  ("the arm is only simulated... please take it from your own box") instead of claiming it brought the
+  medicine, and the pages show a DEMO MODE banner.
 
 ### In-app pages: dashboard, family settings, debug
 

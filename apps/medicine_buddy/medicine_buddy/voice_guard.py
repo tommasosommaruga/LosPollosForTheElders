@@ -54,7 +54,8 @@ class Utterance:
     text: str
     medicines: set[str]
     yes: bool
-    authenticated: set[int] = field(default_factory=set)  # person ids whose passphrase was said
+    # person ids whose passphrase was said; None = not checked yet (checked lazily, see authenticated())
+    authenticated: set[int] | None = None
 
 
 @dataclass
@@ -80,8 +81,9 @@ class VoiceGuard:
     # ---- input from the launcher (the person's real speech)
     def heard(self, text: str) -> Utterance:
         text = (text or "").strip()
-        u = Utterance(self.clock(), text, self.catalog.find_in_text(text), is_affirmative(text),
-                      self.identify(text))
+        # No passphrase hashing here: this runs for EVERY sentence, and hashing is slow on the robot's
+        # small CPU. It is done lazily, only when something actually needs a passphrase.
+        u = Utterance(self.clock(), text, self.catalog.find_in_text(text), is_affirmative(text))
         with self._cond:
             now = self.clock()
             for old in self._heard:  # forget old wording (may contain passphrases)
@@ -92,28 +94,41 @@ class VoiceGuard:
         return u
 
     # ---- passphrases
-    def authenticated(self) -> set[int]:
-        """People whose passphrase a human said within AUTH_WINDOW."""
+    def _identified(self, u: Utterance) -> set[int]:
+        """Whose passphrase is in this sentence (hashed at most once, then remembered)."""
+        if u.authenticated is None:
+            u.authenticated = self.identify(u.text) if u.text else set()
+        return u.authenticated
+
+    def authenticated(self, stop: Callable[[set[int]], bool] | None = None) -> set[int]:
+        """People whose passphrase a human said within AUTH_WINDOW. Checks the newest sentences
+        first and stops as soon as `stop(found)` is true, so most requests hash one sentence or none."""
         now = self.clock()
-        return {pid for u in self._heard if now - u.at <= AUTH_WINDOW for pid in u.authenticated}
+        found: set[int] = set()
+        for u in reversed(list(self._heard)):
+            if now - u.at > AUTH_WINDOW:
+                break
+            found |= self._identified(u)
+            if stop is not None and stop(found):
+                break
+        return found
 
     def reidentify(self) -> None:
-        """Re-check recent speech after someone new registered: the passphrase they just
-        said while registering should count straight away (no need to say it a third time)."""
-        now = self.clock()
+        """People or passphrases changed: forget earlier results so recent speech is re-checked
+        (lazily) against the new data. A passphrase said while registering counts straight away,
+        and one that was just replaced stops counting."""
         with self._cond:
             for u in self._heard:
-                if u.text and now - u.at <= AUTH_WINDOW:
-                    u.authenticated = self.identify(u.text)
+                u.authenticated = None
             self._cond.notify_all()
 
     def wait_authenticated(self, wanted: Callable[[set[int]], bool]) -> bool:
-        return self._wait_for(lambda: wanted(self.authenticated()))
+        return self._wait_for(lambda: wanted(self.authenticated(stop=wanted)))
 
     def times_said(self, matcher: Callable[[str], bool], window: float = MENTION_WINDOW) -> int:
         """How many separate recent utterances satisfy `matcher` (used for 'say it twice')."""
         now = self.clock()
-        return sum(1 for u in self._heard if u.text and now - u.at <= window and matcher(u.text))
+        return sum(1 for u in list(self._heard) if u.text and now - u.at <= window and matcher(u.text))
 
     def wait_times_said(self, matcher: Callable[[str], bool], count: int) -> bool:
         return self._wait_for(lambda: self.times_said(matcher) >= count)
@@ -122,15 +137,17 @@ class VoiceGuard:
         return self._refuse(action, reason, speak)
 
     def _wait_for(self, predicate: Callable[[], bool]) -> bool:
+        """Wait (up to `grace`) until predicate() is true. The predicate runs WITHOUT the lock held:
+        it may hash speech, and incoming transcripts must never wait for that."""
         deadline = time.monotonic() + self.grace
-        with self._cond:
-            while True:
-                if predicate():
-                    return True
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                self._cond.wait(remaining)
+        while True:
+            if predicate():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            with self._cond:
+                self._cond.wait(min(remaining, 0.25))
 
     def _refuse(self, action: str, reason: str, speak: str) -> dict[str, Any]:
         self.blocked.append({"at": time.time(), "action": action, "reason": reason})
@@ -146,7 +163,7 @@ class VoiceGuard:
             return None
         def mentioned() -> bool:
             now = self.clock()
-            return any(medicine in u.medicines and now - u.at <= MENTION_WINDOW for u in self._heard)
+            return any(medicine in u.medicines and now - u.at <= MENTION_WINDOW for u in list(self._heard))
         if self._wait_for(mentioned):
             return None
         return self._refuse(
@@ -161,7 +178,7 @@ class VoiceGuard:
             return None
         def spoke() -> bool:
             now = self.clock()
-            return any(now - u.at <= RECENT_WINDOW for u in self._heard)
+            return any(now - u.at <= RECENT_WINDOW for u in list(self._heard))
         if self._wait_for(spoke):
             return None
         return self._refuse(action, "no recent speech from the person",
@@ -185,7 +202,7 @@ class VoiceGuard:
             return self._refuse(action, "no open question for this action",
                                 "Let me ask you first.")
         def said_yes() -> bool:
-            return any(u.yes and u.at > pending.asked_at for u in self._heard)  # strictly after
+            return any(u.yes and u.at > pending.asked_at for u in list(self._heard))  # strictly after
         if not self._wait_for(said_yes):
             return self._refuse(action, "the person did not say yes",
                                 "I didn't hear you say yes, so I haven't done anything.")
@@ -194,12 +211,13 @@ class VoiceGuard:
         return None
 
     def unlock_status(self) -> dict[int, int]:
-        """person id -> seconds their spoken passphrase still counts (for the debug page)."""
+        """person id -> seconds their spoken passphrase still counts (debug page). Sentences are checked
+        when something needs a passphrase, so this lists the ones checked so far."""
         now = self.clock()
         left: dict[int, int] = {}
-        for u in self._heard:
+        for u in list(self._heard):
             remaining = int(AUTH_WINDOW - (now - u.at))
-            if remaining > 0:
+            if remaining > 0 and u.authenticated:      # only results already computed
                 for pid in u.authenticated:
                     left[pid] = max(left.get(pid, 0), remaining)
         return left

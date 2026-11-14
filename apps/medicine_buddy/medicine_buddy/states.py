@@ -32,9 +32,17 @@ TERMINAL_STATES = frozenset(
 
 ALLOWED_TRANSITIONS: dict[DoseState, frozenset[DoseState]] = {
     DoseState.IDLE: frozenset({DoseState.DUE}),
-    DoseState.DUE: frozenset({DoseState.REMINDED, DoseState.FAILED}),
+    DoseState.DUE: frozenset(
+        {DoseState.REMINDED, DoseState.TAKEN, DoseState.MISSED, DoseState.FAILED}
+    ),
     DoseState.REMINDED: frozenset(
-        {DoseState.CONFIRMED, DoseState.SKIPPED, DoseState.FAILED}
+        {
+            DoseState.CONFIRMED,
+            DoseState.SKIPPED,
+            DoseState.TAKEN,   # person says they took it (no arm involved)
+            DoseState.MISSED,  # person says they did not / reminder window ran out
+            DoseState.FAILED,
+        }
     ),
     DoseState.CONFIRMED: frozenset({DoseState.LOCATING, DoseState.FAILED}),
     DoseState.LOCATING: frozenset({DoseState.PICKING, DoseState.FAILED}),

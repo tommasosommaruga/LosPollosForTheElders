@@ -75,6 +75,19 @@ Passphrases you type on this page never pass through Reachy's AI and are stored 
 fingerprint. This page works only on this computer.
 </div></div>
 
+<section class="panel" id="tzpanel">
+  <h2>Clock &amp; time zone</h2>
+  <p class="hint" id="tz-now">Loading&hellip;</p>
+  <div class="row" id="tz-device" hidden>
+    <button class="primary" type="button" id="tz-use-device">Use this device's time zone</button>
+  </div>
+  <div class="step" style="margin-top:10px"><label for="tz-input">Or type a time zone name</label>
+    <div class="row"><input id="tz-input" autocomplete="off" placeholder="e.g. Europe/Zurich" style="flex:1;min-width:200px">
+    <button type="button" id="tz-save">Save</button></div>
+    <span class="hint">Reminders use this clock. A robot often runs on UTC, which would make "9 AM" fire at the wrong hour.</span></div>
+  <div class="msg" id="tz-msg"></div>
+</section>
+
 <h2>People</h2>
 <div id="people" class="grid"><div class="meta">Loading&hellip;</div></div>
 
@@ -227,5 +240,32 @@ $("ad-save").addEventListener("click", async () => {
   } else msg($("ad-msg"), r.error, false);
 });
 
+const deviceZone = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return ""; } })();
+
+function showTz(r) {
+  const src = {setting: "set on this page", env: "from the settings file", system: "the robot's own clock (not set yet)"}[r.source] || r.source;
+  $("tz-now").textContent = "Robot time now: " + r.robot_time + " on " + r.robot_date + " (" + r.zone_label + ", UTC" +
+    r.utc_offset.slice(0, 3) + ":" + r.utc_offset.slice(3) + "). Source: " + src + ".";
+  $("tz-input").value = r.timezone || "";
+  const differs = deviceZone && deviceZone !== r.timezone;
+  $("tz-device").hidden = !differs;
+  if (differs) $("tz-use-device").textContent = "Use this device's time zone (" + deviceZone + ")";
+}
+
+async function loadTz() {
+  const r = await api("/settings/timezone", {});
+  if (r.status === "ok") showTz(r); else $("tz-now").textContent = r.error || "Could not read the clock.";
+}
+
+async function saveTz(zone) {
+  const r = await api("/settings/timezone", {timezone: zone});
+  if (r.status === "ok") { showTz(r); msg($("tz-msg"), "Saved. Reminders now follow " + (r.timezone || "the robot's own clock") + ".", true); }
+  else msg($("tz-msg"), r.error, false);
+}
+
+$("tz-use-device").addEventListener("click", () => saveTz(deviceZone));
+$("tz-save").addEventListener("click", () => saveTz($("tz-input").value.trim()));
+
 loadPeople();
+loadTz();
 </script></body></html>"""

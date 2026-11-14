@@ -22,7 +22,7 @@ _OUTCOME_KEYS = ("status", "error", "blocked", "final_state", "verified", "speak
 
 
 class DebugMixin:
-    """Mixed into MedicineBuddyService (needs self.db, self.guard, self.config, self.catalog)."""
+    """Mixed into MedicineBuddyService (needs self.db, self.guard, self.config, self.catalog, self.now)."""
 
     def _init_debug(self) -> None:
         self.started_at = time.time()
@@ -67,7 +67,10 @@ class DebugMixin:
             versions = {}
         return {
             "debug": self.debug_enabled,
-            "now": datetime.now().isoformat(timespec="seconds"),
+            "now": self.now().isoformat(timespec="seconds"),
+            "timezone": self.settings_timezone({}),
+            "reminders": (self.reminder_loop.status() if getattr(self, "reminder_loop", None)
+                          else {"running": False, "note": "proactive reminders are off"}),
             "uptime_s": int(time.time() - self.started_at),
             "app": {
                 "versions": versions,
@@ -90,10 +93,10 @@ class DebugMixin:
             "data": {
                 "people": len(people),
                 "caregivers": sum(1 for p in people.values() if p.is_caregiver),
-                "medicines": len(self.db.list_medicines()),
-                "active_schedules": len(self.db.list_active_schedules()),
-                "memories": len(self.db.list_memories(limit=100000)),
-                "dose_events": len(self.db.list_dose_events()),
+                "medicines": self.db.count_rows("medicines"),
+                "active_schedules": self.db.count_rows("schedules", "active = 1"),
+                "memories": self.db.count_rows("memories"),
+                "dose_events": self.db.count_rows("dose_events"),
             },
             "recent_requests": [
                 {**r, "at": datetime.fromtimestamp(r["at"]).strftime("%H:%M:%S")} for r in list(self.requests)[::-1][:60]

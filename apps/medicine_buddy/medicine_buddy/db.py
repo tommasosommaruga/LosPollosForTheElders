@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from medicine_buddy.auth import StoredSecret
+from medicine_buddy.names import name_key
 from medicine_buddy.states import ALLOWED_TRANSITIONS, DoseState
 
 def default_db_path() -> Path:
@@ -160,12 +162,18 @@ class Database:
                 CREATE TABLE IF NOT EXISTS people (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    name_key TEXT,
                     role TEXT NOT NULL CHECK (role IN ('person', 'caregiver')),
                     pass_salt BLOB NOT NULL,
                     pass_hash BLOB NOT NULL,
                     pass_words INTEGER NOT NULL,
                     pass_iterations INTEGER NOT NULL,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS memories (
@@ -204,11 +212,34 @@ class Database:
                 """
             )
             self._migrate_medicines_per_person()
+            self._migrate_people_name_key()
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_medicine_person_name "
                 "ON medicines (COALESCE(person_id, 0), name COLLATE NOCASE)"
             )
             self._conn.commit()
+
+    def _migrate_people_name_key(self) -> None:
+        """Older databases compared names only by ASCII case. Add the canonical key (see names.py),
+        fill it in, and make it unique. Two EXISTING people whose names collapse to the same key are
+        both kept (nothing is deleted or merged): the later one gets a '~<id>' suffix so the index can
+        be built, and a warning is logged so the caregiver can rename one of them."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(people)")}
+        if "name_key" not in cols:
+            self._conn.execute("ALTER TABLE people ADD COLUMN name_key TEXT")
+        rows = self._conn.execute("SELECT id, name, name_key FROM people ORDER BY id").fetchall()
+        seen: set[str] = set()
+        for r in rows:
+            key = name_key(r["name"]) or f"person {r['id']}"
+            if key in seen:
+                logging.getLogger("medicine_buddy.db").warning(
+                    "People #%s '%s' has the same name as an earlier person; kept both - please rename one.",
+                    r["id"], r["name"])
+                key = f"{key}~{r['id']}"
+            seen.add(key)
+            if r["name_key"] != key:
+                self._conn.execute("UPDATE people SET name_key = ? WHERE id = ?", (key, r["id"]))
+        self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_people_name_key ON people (name_key)")
 
     def _migrate_medicines_per_person(self) -> None:
         """v0.1/v0.2 databases had globally-unique medicine names and no person_id.
@@ -256,13 +287,16 @@ class Database:
             raise ValueError("Person name must not be empty")
         if role not in ROLES:
             raise ValueError(f"role must be one of {ROLES}")
+        key = name_key(cleaned)
+        if not key:
+            raise ValueError("Person name must contain letters")
         with self._lock:
             if self.get_person_by_name(cleaned) is not None:
                 raise ValueError(f"{cleaned} is already registered")
             cur = self._write(
-                """INSERT INTO people (name, role, pass_salt, pass_hash, pass_words, pass_iterations, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (cleaned, role, secret.salt, secret.digest, secret.words, secret.iterations, utc_now_iso()),
+                """INSERT INTO people (name, name_key, role, pass_salt, pass_hash, pass_words, pass_iterations, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (cleaned, key, role, secret.salt, secret.digest, secret.words, secret.iterations, utc_now_iso()),
             )
             return Person(int(cur.lastrowid), cleaned, role, secret)
 
@@ -271,7 +305,11 @@ class Database:
         return None if row is None else self._person(row)
 
     def get_person_by_name(self, name: str) -> Person | None:
-        row = self._one("SELECT * FROM people WHERE name = ? COLLATE NOCASE", (" ".join(name.split()),))
+        """Exact person by canonical name: case, accents and spacing never matter (names.py)."""
+        key = name_key(name)
+        if not key:
+            return None
+        row = self._one("SELECT * FROM people WHERE name_key = ?", (key,))
         return None if row is None else self._person(row)
 
     def list_people(self) -> list[Person]:
@@ -287,6 +325,22 @@ class Database:
 
     def has_caregiver(self) -> bool:
         return self._one("SELECT 1 FROM people WHERE role = 'caregiver' LIMIT 1") is not None
+
+    # ---- small key/value settings (time zone ...)
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        row = self._one("SELECT value FROM app_settings WHERE key = ?", (key,))
+        return default if row is None else row["value"]
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Empty value removes the setting (back to the default)."""
+        if value:
+            self._write(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+        else:
+            self._write("DELETE FROM app_settings WHERE key = ?", (key,))
 
     # ---- memories (stories, recipes, skills, traditions ...)
     @staticmethod
@@ -495,12 +549,23 @@ class Database:
                 created_at=now,
             )
 
-    def list_dose_events(self, medicine_id: int | None = None) -> list[DoseEvent]:
-        if medicine_id is None:
-            rows = self._all(f"SELECT {_EVENT_COLS} FROM dose_events ORDER BY id")
+    def list_dose_events(self, medicine_id: int | None = None, limit: int | None = None) -> list[DoseEvent]:
+        """Oldest first. `limit`: only the most recent N (still oldest first)."""
+        sql, params = f"SELECT {_EVENT_COLS} FROM dose_events", []
+        if medicine_id is not None:
+            sql += " WHERE medicine_id = ?"
+            params.append(medicine_id)
+        if limit:
+            rows = self._all(sql + " ORDER BY id DESC LIMIT ?", (*params, int(limit)))[::-1]
         else:
-            rows = self._all(
-                f"SELECT {_EVENT_COLS} FROM dose_events WHERE medicine_id = ? ORDER BY id",
-                (medicine_id,),
-            )
+            rows = self._all(sql + " ORDER BY id", tuple(params))
         return [_event(r) for r in rows]
+
+    _COUNTABLE = frozenset({"people", "medicines", "schedules", "memories", "dose_events"})
+
+    def count_rows(self, table: str, where: str = "") -> int:
+        """COUNT(*) of a known table (the pages refresh often: never load whole tables to count them)."""
+        if table not in self._COUNTABLE:
+            raise ValueError(f"cannot count {table!r}")
+        row = self._one(f"SELECT COUNT(*) AS n FROM {table}" + (f" WHERE {where}" if where else ""))
+        return int(row["n"])

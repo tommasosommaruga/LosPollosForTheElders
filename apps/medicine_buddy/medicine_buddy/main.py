@@ -75,7 +75,7 @@ from medicine_buddy.api import MedicineBuddyService, start_server  # noqa: E402
 from medicine_buddy.config import AppConfig  # noqa: E402
 from medicine_buddy.db import default_db_path  # noqa: E402
 from medicine_buddy.reminders import ReminderLoop  # noqa: E402
-from medicine_buddy.speaker import make_rpc_speaker  # noqa: E402
+from medicine_buddy.speaker import RpcSpeaker  # noqa: E402
 from medicine_buddy.web_ui import attach_web_ui  # noqa: E402
 
 _SERVICE: MedicineBuddyService | None = None
@@ -135,7 +135,9 @@ class MedicineBuddy(ReachyMiniApp):
         reminders = None
         if os.environ.get("MEDICINE_BUDDY_REMINDERS", "1").lower() not in {"0", "false", "no", "off"}:
             ui_port = urlparse(self.custom_app_url).port or 7860
-            reminders = ReminderLoop(service, make_rpc_speaker(f"ws://127.0.0.1:{ui_port}/rpc"))
+            speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")   # waits until Reachy is idle
+            speaker.start()
+            reminders = ReminderLoop(service, speaker)
             service.reminder_loop = reminders   # shown on the debug page
             reminders.start()
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
@@ -147,6 +149,7 @@ class MedicineBuddy(ReachyMiniApp):
             _SERVICE = None
             if reminders is not None:
                 reminders.stop()
+                reminders.speak.stop()
             server.shutdown()
             server.server_close()
             service.close()

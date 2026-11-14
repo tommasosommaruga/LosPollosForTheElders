@@ -1,0 +1,56 @@
+"""External tool: run arm dispense after the person confirms."""
+
+from __future__ import annotations
+
+import importlib.util
+import logging
+from pathlib import Path
+from typing import Any
+
+from reachy_mini_conversation_app.tools.core_tools import Tool, ToolDependencies
+
+logger = logging.getLogger(__name__)
+
+
+def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    helper = Path(__file__).resolve().parent.parent / "lib" / "tool_http.py"
+    spec = importlib.util.spec_from_file_location("medicine_tool_http", helper)
+    if spec is None or spec.loader is None:
+        return {"error": f"missing helper {helper}"}
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.api_request(method, path, body)
+
+
+class DispenseMedicine(Tool):
+    name = "dispense_medicine"
+    description = (
+        "Ask the person first if you should bring the medicine. Only call this with "
+        "confirmed=true after they say yes. This tells the Maker Arm computer to "
+        "find the labeled box and place it in the bowl. Do not invent dosing advice."
+    )
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "medicine_name": {"type": "string", "description": "Medicine name to dispense"},
+            "confirmed": {
+                "type": "boolean",
+                "description": "True only after the person agreed to bring it",
+            },
+        },
+        "required": ["medicine_name", "confirmed"],
+    }
+
+    async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
+        del deps
+        payload = _api_request(
+            "POST",
+            "/doses/run",
+            {
+                "medicine_name": kwargs.get("medicine_name"),
+                "confirmed": bool(kwargs.get("confirmed", False)),
+                "stop_after_placed": True,
+            },
+        )
+        logger.info("dispense_medicine → %s", payload)
+        return payload

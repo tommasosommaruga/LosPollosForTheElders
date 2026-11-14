@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# Local agent / hardware session state (do not commit secrets)
+agents.local.md
+integrations/reachy_conversation/.env.generated
+
+# Runtime data
+apps/medicine_buddy/data/*.db
+apps/medicine_buddy/data/*.db-*
+!apps/medicine_buddy/data/.gitkeep
+
+# Taught arm waypoints (machine-specific)
+apps/medicine_buddy/data/waypoints/*.json
+!apps/medicine_buddy/data/waypoints/.gitkeep

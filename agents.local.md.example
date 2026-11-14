@@ -1,0 +1,43 @@
+# Copy to agents.local.md and fill in. agents.local.md is gitignored.
+
+robot:
+  reachy: wireless  # or lite / simulation
+  maker_arm: connected  # or dry-run
+  # If Reachy daemon/conversation runs on another PC:
+  reachy_host_pc: other  # this | other
+
+cameras:
+  overhead_index: 0
+  wrist_index: 1
+  reachy_index: 2
+
+tray:
+  slot_count: 4
+  labels:
+    - ASPIRIN
+    - VITAMIN_D
+    - EMPTY
+    - EMPTY
+
+vision:
+  ocr_min_confidence: 0.65
+
+demo:
+  dry_run: true
+
+# Two-machine conversation integration
+medicine_buddy:
+  serve_host: 0.0.0.0
+  serve_port: 8787
+  # LAN URL that the Reachy PC must use:
+  public_url: http://CHANGE_ME_ARM_PC_IP:8787
+
+reachy_conversation:
+  # Paths on the Reachy PC (shared drive, git clone, or copied folder)
+  external_tools: integrations/reachy_conversation/external_tools
+  external_profiles: integrations/reachy_conversation/external_profiles
+  profile: medicine_caregiver
+  env:
+    MEDICINE_BUDDY_URL: http://CHANGE_ME_ARM_PC_IP:8787
+    AUTOLOAD_EXTERNAL_TOOLS: "1"
+    REACHY_MINI_CUSTOM_PROFILE: medicine_caregiver

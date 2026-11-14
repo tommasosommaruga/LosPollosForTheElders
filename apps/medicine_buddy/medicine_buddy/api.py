@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import json
 import threading
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from medicine_buddy.access import PeopleAccessMixin
+from medicine_buddy.debug import DebugMixin
 from medicine_buddy.family_page import render_family_page
 from medicine_buddy.settings import SettingsMixin
 from medicine_buddy.catalog import MedicineCatalog
@@ -46,7 +48,7 @@ def _whose(person: Person | None) -> str:
     return f" for {person.name}" if person else ""
 
 
-class MedicineBuddyService(PeopleAccessMixin, SettingsMixin):
+class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin):
     def __init__(
         self,
         db_path: Path,
@@ -63,6 +65,7 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin):
         self.guard.identify = self._identify_speakers  # recognise spoken passphrases
         self._lock = threading.Lock()  # serializes multi-step operations
         self._init_settings()
+        self._init_debug()
 
     def family_page(self) -> str:
         return render_family_page(self.settings_token)
@@ -524,7 +527,11 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin):
         }
 
     # ------------------------------------------------------------ status page
-    def status_page(self) -> str:
+    def status_page(self, nav: str | None = None) -> str:
+        """The dashboard. `nav` replaces the default header link (used by the in-app UI)."""
+        if nav is None:
+            nav = ('<a href="/family" style="font-size:14px;font-weight:500;margin-left:10px;'
+                   'color:var(--accent)">Family settings &rarr;</a>')
         esc = html.escape
         meds = self.db.list_medicines()
         names = {m.id: m.name for m in meds}
@@ -587,7 +594,7 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin):
         ) or "<tr><td colspan=3 class=muted>Nothing blocked.</td></tr>"
 
         return _PAGE.format(rows=rows, log=log, chips=chips, mode=esc(mode), guard=guard_line,
-                            blocked=blocked, people=people_rows, memories=mem_rows,
+                            blocked=blocked, people=people_rows, memories=mem_rows, nav=nav,
                             now=datetime.now().strftime("%H:%M:%S"))
 
 
@@ -611,8 +618,9 @@ tr.due td{{background:var(--due)}} .muted{{color:var(--muted)}}
 .st{{font-weight:600}} .st-taken{{color:var(--accent)}} .st-missed,.st-failed{{color:#c0392b}}
 .ok{{color:var(--accent)}} .warn{{color:#c0392b}} code{{font-size:13px}}
 summary{{cursor:pointer}} .memtext{{white-space:pre-wrap;margin-top:6px;color:var(--fg)}}
+a{{color:var(--accent)}}
 </style></head><body><main>
-<h1>Medicine Buddy <a href="/family" style="font-size:14px;font-weight:500;margin-left:10px;color:var(--accent)">Family settings &rarr;</a></h1>
+<h1>Medicine Buddy {nav}</h1>
 <div class=sub>Mode: {mode} &middot; updated {now} &middot; refreshes every 15 s</div>
 <section><h2>People</h2><table><tr><th>Name</th><th>Role</th><th>Medicines</th><th>Memories</th></tr>{people}</table></section>
 <section><h2>Schedules</h2><table><tr><th>Person</th><th>Medicine</th><th>Time</th><th>Days</th><th></th><th></th></tr>{rows}</table></section>
@@ -662,6 +670,7 @@ def _send(handler: BaseHTTPRequestHandler, code: int, body: bytes, content_type:
 
 
 def _send_json(handler: BaseHTTPRequestHandler, code: int, payload: dict[str, Any]) -> None:
+    handler._last_payload = payload  # type: ignore[attr-defined]  # outcome for the debug log
     _send(handler, code, json.dumps(payload).encode("utf-8"), "application/json")
 
 
@@ -718,17 +727,28 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
             # No cross-origin access is offered, so pre-flight requests are always refused.
             _send_json(self, 403, {"error": "cross-origin requests are not allowed"})
 
-        def do_GET(self) -> None:  # noqa: N802
+        def send_response(self, code: int, message: str | None = None) -> None:
+            self._status_code = code
+            super().send_response(code, message)
+
+        def _handle(self, method: str, fn) -> None:
+            start = time.perf_counter()
+            self._status_code, self._last_payload = 0, None
             try:
-                self._get()
+                fn()
             except Exception as exc:  # noqa: BLE001 — always answer, never drop the request
                 _send_json(self, 500, {"error": f"internal error: {exc}"})
+            finally:
+                path = urlparse(self.path).path
+                if path not in {"/health"}:  # skip noisy liveness polling
+                    service.record_request(method, path, self._status_code,
+                                           (time.perf_counter() - start) * 1000, self._last_payload)
+
+        def do_GET(self) -> None:  # noqa: N802
+            self._handle("GET", self._get)
 
         def do_POST(self) -> None:  # noqa: N802
-            try:
-                self._post()
-            except Exception as exc:  # noqa: BLE001
-                _send_json(self, 500, {"error": f"internal error: {exc}"})
+            self._handle("POST", self._post)
 
         def _get(self) -> None:
             path = urlparse(self.path).path.rstrip("/") or "/"

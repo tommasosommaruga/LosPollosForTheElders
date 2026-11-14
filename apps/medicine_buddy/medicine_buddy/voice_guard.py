@@ -193,6 +193,31 @@ class VoiceGuard:
             pending.used = True  # one answer per question
         return None
 
+    def unlock_status(self) -> dict[int, int]:
+        """person id -> seconds their spoken passphrase still counts (for the debug page)."""
+        now = self.clock()
+        left: dict[int, int] = {}
+        for u in self._heard:
+            remaining = int(AUTH_WINDOW - (now - u.at))
+            if remaining > 0:
+                for pid in u.authenticated:
+                    left[pid] = max(left.get(pid, 0), remaining)
+        return left
+
+    def pending_status(self) -> list[dict[str, Any]]:
+        """Open confirmation questions (for the debug page)."""
+        now = self.clock()
+        return [
+            {"action": p.key.split(":")[0], "seconds_left": int(CONFIRM_WINDOW - (now - p.asked_at))}
+            for p in self._pending.values()
+            if not p.used and now - p.asked_at <= CONFIRM_WINDOW
+        ]
+
+    def seconds_since_speech(self) -> int | None:
+        if not self._heard:
+            return None
+        return int(self.clock() - self._heard[-1].at)
+
     def status(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,

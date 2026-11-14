@@ -213,6 +213,24 @@ reachy-mini-app-assistant check apps/medicine_buddy      # validate the app pack
   can ask *"Tell me a story Grandpa Mario told you"*.
 - *"What's the weather in Geneva?"* - safe web search.
 
+### In-app pages: dashboard, family settings, debug
+
+When Medicine Buddy runs, Reachy Mini Control opens **`http://<robot>:7860/medicine`** (from a laptop run:
+http://127.0.0.1:7860/medicine). Sign in with the **caregiver's passphrase** (typed; open while nobody is
+registered; any family member's while there is no caregiver yet). Then:
+
+- **Dashboard** - people, schedules, due now, family memories, dose log, security.
+- **Family & passphrases** - change passphrases, suggest easy ones, add people.
+- **Debug** - live view every 3 s: versions, database, voice guard (who is unlocked and for how long,
+  open confirmation questions, blocked attempts), data counts, and the recent requests with their
+  outcome. The **Debug mode** switch turns on detailed `medicine_buddy` logs (or set `MEDICINE_BUDDY_DEBUG=1`).
+  It never shows what people said or any passphrase.
+- **Voice & language settings** - Pollen's conversation settings, still at `/`.
+
+These pages are on the local network, so they need the sign-in: 5 wrong attempts lock that device
+out for a few minutes, the session cookie is HttpOnly/SameSite=Strict, and changes need a per-session
+token. They're plain HTTP, so use them on a network you trust.
+
 Passphrases are **changed on the Family settings page** (typed, never spoken). Medicine names are
 limited to [`medicine_catalog.json`](apps/medicine_buddy/medicine_buddy/medicine_catalog.json).
 

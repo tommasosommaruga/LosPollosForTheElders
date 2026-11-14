@@ -9,8 +9,14 @@ from __future__ import annotations
 import json
 
 
-def render_family_page(token: str) -> str:
-    return _PAGE.replace("__TOKEN__", json.dumps(token))
+def render_family_page(token: str, base: str = "", nav: str | None = None) -> str:
+    """base: URL prefix of the settings routes ('' on :8787, '/medicine' in the app UI).
+    nav: optional navigation bar HTML replacing the default back link."""
+    if nav is None:
+        nav = '<p><a href="/">&larr; Medicine Buddy</a></p>'
+    return (_PAGE.replace("__TOKEN__", json.dumps(token))
+                 .replace("__BASE__", json.dumps(base))
+                 .replace("<!--NAV-->", nav))
 
 
 _PAGE = r"""<!doctype html>
@@ -59,7 +65,7 @@ input,select{font:inherit;width:100%;padding:11px 12px;border-radius:10px;border
 .msg.err{display:block;background:transparent;border:1px solid var(--warn);color:var(--warn)}
 [hidden]{display:none!important}
 </style></head><body><main>
-<p><a href="/">&larr; Medicine Buddy</a></p>
+<!--NAV-->
 <h1>Family &amp; passphrases</h1>
 <p class="sub">Each person's passphrase protects their own medicine timetable and memories.</p>
 
@@ -116,10 +122,11 @@ fingerprint. This page works only on this computer.
 </main>
 <script>
 const TOKEN = __TOKEN__;
+const BASE = __BASE__;
 const $ = id => document.getElementById(id);
 
 async function api(path, body) {
-  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Family-Token": TOKEN},
+  const r = await fetch(BASE + path, {method: "POST", headers: {"Content-Type": "application/json", "X-Family-Token": TOKEN},
                                body: JSON.stringify(body || {})});
   let data = {};
   try { data = await r.json(); } catch (e) { data = {error: "Unexpected answer from the server"}; }

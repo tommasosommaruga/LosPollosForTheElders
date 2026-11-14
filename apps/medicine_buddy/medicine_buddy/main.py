@@ -73,6 +73,7 @@ from reachy_mini_conversation_app.conversation_handler import ConversationHandle
 from medicine_buddy.api import MedicineBuddyService, start_server  # noqa: E402
 from medicine_buddy.config import AppConfig  # noqa: E402
 from medicine_buddy.db import default_db_path  # noqa: E402
+from medicine_buddy.web_ui import attach_web_ui  # noqa: E402
 
 _SERVICE: MedicineBuddyService | None = None
 
@@ -100,13 +101,17 @@ class MedicineBuddy(ReachyMiniApp):
 
     Runs Pollen's conversation app inside (same calls as its ReachyMiniConversationApp class)."""
 
-    # The conversation app's own settings UI (voice, language...); opened by Reachy Mini Control.
-    custom_app_url = "http://0.0.0.0:7860/"
+    # Reachy Mini Control opens this page: the Medicine Buddy dashboard (sign-in, family settings,
+    # debug). Pollen's voice & language settings stay at "/" on the same server.
+    custom_app_url = "http://0.0.0.0:7860/medicine"
     dont_start_webserver = False
 
     def __init__(self, *args, **kwargs) -> None:
         conversation.start_import_warmup()  # preload heavy imports while the robot connects
         super().__init__(*args, **kwargs)
+        if self.settings_app is not None:
+            # Registered now (the web server starts before run()); shows "starting..." until ready.
+            attach_web_ui(self.settings_app, lambda: _SERVICE)
 
     def _run_conversation(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
         asyncio.set_event_loop(asyncio.new_event_loop())
@@ -125,6 +130,7 @@ class MedicineBuddy(ReachyMiniApp):
         _SERVICE = service
         _install_transcript_hook()
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
+        logger.info("In-app pages (sign in with the caregiver passphrase): http://<this-machine>:7860/medicine")
         logger.info("Database: %s  |  voice guard: %s  |  profile: %s (locked)", db_path, guard, PROFILE)
         try:
             self._run_conversation(reachy_mini, stop_event)

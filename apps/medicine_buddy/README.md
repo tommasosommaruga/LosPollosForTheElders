@@ -1,17 +1,32 @@
-# medicine_buddy (Python package)
+---
+title: Medicine Buddy
+emoji: 💊
+colorFrom: green
+colorTo: yellow
+sdk: static
+pinned: false
+short_description: Medicine reminders per person and family memories, protected by spoken passphrases
+tags:
+ - reachy_mini
+ - reachy_mini_python_app
+---
 
-Orchestrator for elderly medicine remind → confirm → OCR locate → arm place → adherence.
+# Medicine Buddy (Reachy Mini app + Python package)
 
-Full project vision, architecture, and arm-team handoff: **[../../README.md](../../README.md)**  
+A Reachy Mini app for elderly care: per-person medicine reminders, a family memory store
+(stories, recipes, skills, traditions) and passphrase access control - plus the dose
+pipeline (remind → confirm → OCR locate → arm place → adherence) for the Maker Arm.
+
+Full project, setup and run instructions: **[../../README.md](../../README.md)**  
 Arm contract detail: **[../../docs/ARM_TEAM_HANDOFF.md](../../docs/ARM_TEAM_HANDOFF.md)**
 
 ## Commands
 
 ```bash
-pip install -e ".[dev]"
-medicine-buddy demo --dry-run
-medicine-buddy serve --host 127.0.0.1 --port 8787 --dry-run
-medicine-buddy check-due
+pip install -e ".[dev]"                         # also installs reachy-mini + the conversation app
+python -m medicine_buddy.main --host <robot-ip> # the whole app, from a laptop
+medicine-buddy serve --dry-run --voice-guard    # only the API / status page
+medicine-buddy demo --dry-run                   # console demo of the dose pipeline
 pytest
 ```
 
@@ -19,12 +34,16 @@ pytest
 
 | File | Role |
 |------|------|
+| `main.py` | **Reachy Mini app** (`MedicineBuddy`): conversation app + API + voice guard |
+| `conversation/` | Voice tools and the `medicine_caregiver` profile loaded by the conversation app |
+| `api.py` | HTTP API, status page `/`, family settings `/family` |
+| `access.py` | People, passphrases, access control, family memories |
+| `settings.py` / `family_page.py` | Typed passphrase changes (never spoken) |
+| `voice_guard.py` | Medicine changes only when the person really said so |
+| `web_safety.py` / `catalog.py` | Web result cleaning; allowed medicine names |
 | `orchestrator.py` | `DoseStateMachine` |
-| `api.py` | HTTP for pollen conversation tools |
-| `ports.py` | `VisionPort` / `ArmPort` / … contracts |
-| `dry_run.py` | Fake implementations |
+| `ports.py` / `dry_run.py` | Arm / vision contracts and fakes |
 | `db.py` / `states.py` | Persistence + legal transitions |
-| `vision_ocr.py` / `arm_controller.py` | Hardware stubs for the arm team |
 
 ## States
 

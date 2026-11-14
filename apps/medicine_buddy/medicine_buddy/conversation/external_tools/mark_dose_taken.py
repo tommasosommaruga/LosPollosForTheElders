@@ -1,4 +1,4 @@
-"""External tool: save a medicine schedule via Medicine Buddy API."""
+"""External tool: mark adherence after Reachy asked the person."""
 
 from __future__ import annotations
 
@@ -22,33 +22,35 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
     return mod.api_request(method, path, body)
 
 
-class ScheduleMedicine(Tool):
-    name = "schedule_medicine"
+class MarkDoseTaken(Tool):
+    name = "mark_dose_taken"
     description = (
-        "Save a medicine and when the person should take it. "
-        "Use when they say they take a medicine on certain days/times. "
-        "weekdays can be 'daily' or names like 'Mon,Wed,Fri'. time is HH:MM."
+        "After the medicine is in the bowl, ask if they took it. Then call this with "
+        "taken=true or taken=false to log adherence. Never give medical advice."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
-            "name": {"type": "string", "description": "Medicine name, e.g. Aspirin"},
-            "weekdays": {"type": "string", "description": "daily or weekday list"},
-            "time": {"type": "string", "description": "Local time HH:MM"},
+            "person": {"type": "string", "description": "Whose medicines (the person's name). Omit only if there is just one person."},
+            "medicine_name": {"type": "string", "description": "Medicine name"},
+            "taken": {
+                "type": "boolean",
+                "description": "Whether the person took the dose",
+            },
         },
-        "required": ["name", "weekdays", "time"],
+        "required": ["medicine_name", "taken"],
     }
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         del deps
         payload = _api_request(
             "POST",
-            "/schedules",
+            "/doses/adherence",
             {
-                "name": kwargs.get("name"),
-                "weekdays": kwargs.get("weekdays", "daily"),
-                "time": kwargs.get("time"),
+                "person": kwargs.get("person"),
+                "medicine_name": kwargs.get("medicine_name"),
+                "taken": bool(kwargs.get("taken", False)),
             },
         )
-        logger.info("schedule_medicine → %s", payload)
+        logger.info("mark_dose_taken → %s", payload)
         return payload

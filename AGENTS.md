@@ -64,20 +64,20 @@ pip install -e ".[dev]"
 medicine-buddy demo --dry-run
 ```
 
-## Robot host PC (pull and run)
+## Run it (Reachy Mini app)
 
-When the other computer is connected to Reachy and will `git pull` this repo:
+`apps/medicine_buddy` is a Reachy Mini app (`medicine_buddy.main:MedicineBuddy`): one process runs
+Pollen's conversation app with our bundled tools/profile (`medicine_buddy/conversation/`), the API on
+`127.0.0.1:8787` and the voice guard.
 
 ```bash
-./scripts/bootstrap.sh
-./scripts/run_robot_host.sh                    # Medicine Buddy API
-./scripts/run_conversation_with_medicine.sh    # pollen conversation TTS
+./scripts/bootstrap.sh                 # venv + pip install -e ".[dev]" + .env from .env.example
+./scripts/run_robot_host.sh            # = python -m medicine_buddy.main (robot from REACHY_HOST in .env)
+./scripts/install_on_robot.sh          # install on a Wireless robot -> Reachy Mini Control -> Applications
 ```
 
-Same-machine default: API at `http://127.0.0.1:8787`, tools path auto-written to
-`integrations/reachy_conversation/.env.generated`.
-
-Full steps: [integrations/reachy_conversation/README.md](integrations/reachy_conversation/README.md)
+Validate packaging with `reachy-mini-app-assistant check apps/medicine_buddy`.
+Full steps: [README.md → How to run](README.md#how-to-run)
 
 ## References
 

@@ -1,4 +1,4 @@
-"""External tool: mark adherence after Reachy asked the person."""
+"""External tool: run arm dispense after the person confirms."""
 
 from __future__ import annotations
 
@@ -22,33 +22,37 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
     return mod.api_request(method, path, body)
 
 
-class MarkDoseTaken(Tool):
-    name = "mark_dose_taken"
+class DispenseMedicine(Tool):
+    name = "dispense_medicine"
     description = (
-        "After the medicine is in the bowl, ask if they took it. Then call this with "
-        "taken=true or taken=false to log adherence. Never give medical advice."
+        "Ask the person first if you should bring the medicine. Only call this with "
+        "confirmed=true after they say yes. This tells the Maker Arm computer to "
+        "find the labeled box and place it in the bowl. Do not invent dosing advice."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
-            "medicine_name": {"type": "string", "description": "Medicine name"},
-            "taken": {
+            "person": {"type": "string", "description": "Whose medicines (the person's name). Omit only if there is just one person."},
+            "medicine_name": {"type": "string", "description": "Medicine name to dispense"},
+            "confirmed": {
                 "type": "boolean",
-                "description": "Whether the person took the dose",
+                "description": "True only after the person agreed to bring it",
             },
         },
-        "required": ["medicine_name", "taken"],
+        "required": ["medicine_name", "confirmed"],
     }
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         del deps
         payload = _api_request(
             "POST",
-            "/doses/adherence",
+            "/doses/run",
             {
+                "person": kwargs.get("person"),
                 "medicine_name": kwargs.get("medicine_name"),
-                "taken": bool(kwargs.get("taken", False)),
+                "confirmed": bool(kwargs.get("confirmed", False)),
+                "stop_after_placed": True,
             },
         )
-        logger.info("mark_dose_taken → %s", payload)
+        logger.info("dispense_medicine → %s", payload)
         return payload

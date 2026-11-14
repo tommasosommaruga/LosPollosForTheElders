@@ -1,4 +1,4 @@
-"""External tool: list saved medicines and schedules."""
+"""External tool: who is registered (names and roles only, never passphrases)."""
 
 from __future__ import annotations
 
@@ -22,15 +22,16 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
     return mod.api_request(method, path, body)
 
 
-class ListMedicines(Tool):
-    name = "list_medicines"
+class ListPeople(Tool):
+    name = "list_people"
     description = (
-        "List medicines and schedules stored in Medicine Buddy on the arm computer."
+        "List the registered people (names, caregiver or family member, how many memories and "
+        "medicines each has). Use it to find who someone means, e.g. 'grandpa' -> 'Mario'."
     )
     parameters_schema = {"type": "object", "properties": {}, "required": []}
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         del deps, kwargs
-        payload = _api_request("GET", "/medicines")
-        logger.info("list_medicines → %s", payload)
+        payload = _api_request("POST", "/people/list", {})
+        logger.info("list_people → %s", payload)
         return payload

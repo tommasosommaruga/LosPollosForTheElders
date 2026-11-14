@@ -1,0 +1,15 @@
+{
+  "_note": "The ONLY medicine names Medicine Buddy will accept. Add aliases for common speech-to-text spellings. Override with env MEDICINE_BUDDY_CATALOG=/path/to/file.json",
+  "medicines": [
+    {"name": "Aspirin",       "aliases": ["asprin", "aspirine", "acetylsalicylic acid"]},
+    {"name": "Vitamin D",     "aliases": ["vitamin d3", "vit d", "vitamin dee", "d3"]},
+    {"name": "Paracetamol",   "aliases": ["acetaminophen", "tylenol", "panadol"]},
+    {"name": "Ibuprofen",     "aliases": ["advil", "nurofen"]},
+    {"name": "Metformin",     "aliases": ["glucophage"]},
+    {"name": "Lisinopril",    "aliases": []},
+    {"name": "Amlodipine",    "aliases": []},
+    {"name": "Atorvastatin",  "aliases": ["lipitor"]},
+    {"name": "Omeprazole",    "aliases": ["prilosec"]},
+    {"name": "Levothyroxine", "aliases": ["thyroxine", "synthroid", "euthyrox"]}
+  ]
+}

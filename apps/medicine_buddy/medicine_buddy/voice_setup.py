@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from medicine_buddy.db import Database, Medicine, Schedule
 from medicine_buddy.ports import BuddyPort
 
@@ -23,34 +25,81 @@ WEEKDAY_NAMES = {
 }
 
 
+DAY_SPOKEN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
 def parse_weekdays(raw: str) -> str:
+    """'daily' / 'weekdays' / 'Mon, Wed' / 'monday and friday' / 'mondays' -> '*' or '0,2'."""
     text = raw.strip().lower()
-    if text in {"daily", "every day", "everyday", "*"}:
+    text = re.sub(r"\bevery\s+", "", text).strip()
+    if text in {"daily", "day", "every day", "everyday", "each day", "*", ""}:
+        if text == "":
+            raise ValueError("No weekdays provided")
         return "*"
-    parts = [p.strip() for p in text.replace(";", ",").split(",") if p.strip()]
+    if text in {"weekdays", "weekday", "workdays"}:
+        return "0,1,2,3,4"
+    if text in {"weekends", "weekend"}:
+        return "5,6"
+    parts = [p for p in re.split(r"[,;/&]|\band\b|\s+", text) if p.strip()]
     if not parts:
         raise ValueError("No weekdays provided")
     codes: list[str] = []
     for part in parts:
-        if part.isdigit() and part in {"0", "1", "2", "3", "4", "5", "6"}:
+        part = part.strip().rstrip(".")
+        if part in {"0", "1", "2", "3", "4", "5", "6"}:
             codes.append(part)
             continue
+        if part not in WEEKDAY_NAMES and part.endswith("s") and part[:-1] in WEEKDAY_NAMES:
+            part = part[:-1]  # "mondays" -> "monday"
         if part not in WEEKDAY_NAMES:
             raise ValueError(f"Unknown weekday: {part}")
         codes.append(WEEKDAY_NAMES[part])
-    return ",".join(sorted(set(codes), key=int))
+    codes = sorted(set(codes), key=int)
+    return "*" if len(codes) == 7 else ",".join(codes)
 
 
 def parse_time_hhmm(raw: str) -> str:
-    text = raw.strip()
-    if ":" not in text:
-        raise ValueError("Time must look like HH:MM")
-    hour_s, minute_s = text.split(":", 1)
-    hour = int(hour_s)
-    minute = int(minute_s)
+    """'09:00', '9:5', '9', '9 am', '8:30 PM', '21.30', '2130', 'noon', 'midnight' -> 'HH:MM'."""
+    text = raw.strip().lower().replace(".", ":").replace(" o'clock", "").replace("o'clock", "")
+    text = text.replace("a.m.", "am").replace("p.m.", "pm")
+    if text in {"noon", "midday"}:
+        return "12:00"
+    if text == "midnight":
+        return "00:00"
+    m = re.fullmatch(r"(\d{1,2})(?::?(\d{2}))?(am|pm)?", text.replace(" ", ""))
+    if not m:
+        raise ValueError(f"Time must look like HH:MM or '9 AM', got {raw!r}")
+    hour = int(m.group(1))
+    minute = int(m.group(2) or 0)
+    meridiem = m.group(3)
+    if meridiem:
+        if not 1 <= hour <= 12:
+            raise ValueError("Time out of range")
+        hour = (hour % 12) + (12 if meridiem == "pm" else 0)
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         raise ValueError("Time out of range")
     return f"{hour:02d}:{minute:02d}"
+
+
+def describe_weekdays(weekdays: str) -> str:
+    """Stored weekdays -> words Reachy can say: 'every day', 'on weekdays', 'on Monday and Friday'."""
+    if weekdays.strip() == "*":
+        return "every day"
+    codes = [int(c) for c in weekdays.split(",") if c.strip()]
+    if codes == [0, 1, 2, 3, 4]:
+        return "on weekdays"
+    if codes == [5, 6]:
+        return "on weekends"
+    names = [DAY_SPOKEN[c] for c in codes]
+    return "on " + (names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1])
+
+
+def describe_time(time_hhmm: str) -> str:
+    """'09:00' -> '9 AM', '20:30' -> '8:30 PM'."""
+    hour, minute = (int(x) for x in time_hhmm.split(":"))
+    suffix = "AM" if hour < 12 else "PM"
+    h12 = hour % 12 or 12
+    return f"{h12} {suffix}" if minute == 0 else f"{h12}:{minute:02d} {suffix}"
 
 
 def setup_medicine_schedule(
@@ -64,7 +113,8 @@ def setup_medicine_schedule(
     weekdays = parse_weekdays(weekdays_raw)
     time_hhmm = parse_time_hhmm(time_raw)
     summary = (
-        f"I will remind you for {name} on {weekdays} at {time_hhmm}. Is that correct?"
+        f"I will remind you for {name} {describe_weekdays(weekdays)} at "
+        f"{describe_time(time_hhmm)}. Is that correct?"
     )
     if not buddy.ask_yes_no(summary):
         raise ValueError("Setup cancelled by user")

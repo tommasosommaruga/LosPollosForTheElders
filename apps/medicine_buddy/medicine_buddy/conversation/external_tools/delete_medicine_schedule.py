@@ -33,6 +33,8 @@ class DeleteMedicineSchedule(Tool):
     parameters_schema = {
         "type": "object",
         "properties": {
+            "person": {"type": "string", "description": "Whose medicines (the person's name). Omit only if there is just one person."},
+            "passphrase": {"type": "string", "description": "The passphrase of the person whose list it is (or the caregiver's), as just said. Only needed if the voice guard is off. Never repeat it aloud."},
             "name": {"type": "string", "description": "Medicine name as the person said it"},
             "confirmed": {"type": "boolean", "description": "True only after the person agreed to remove it"},
             "time": {"type": "string", "description": "Optional: which time to remove, e.g. '9 PM'"},
@@ -48,6 +50,9 @@ class DeleteMedicineSchedule(Tool):
             "confirmed": bool(kwargs.get("confirmed", False)),
             "all": bool(kwargs.get("all", False)),
         }
+        for key in ("person", "passphrase"):
+            if kwargs.get(key):
+                body[key] = kwargs[key]
         if kwargs.get("time"):
             body["time"] = kwargs["time"]
         payload = _api_request("POST", "/schedules/delete", body)

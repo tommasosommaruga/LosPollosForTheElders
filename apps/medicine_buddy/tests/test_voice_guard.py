@@ -176,7 +176,7 @@ def test_guard_disabled_keeps_old_behaviour(tmp_path: Path) -> None:
 
 def test_no_ai_tool_can_reach_the_voice_endpoint() -> None:
     """The guard is only meaningful if the LLM has no way to post fake transcripts."""
-    tools = Path(__file__).resolve().parents[3] / "integrations" / "reachy_conversation"
+    tools = Path(__file__).resolve().parents[1] / "medicine_buddy" / "conversation"
     sources = [p.read_text(encoding="utf-8") for p in (tools / "external_tools").glob("*.py")]
     sources.append((tools / "lib" / "tool_http.py").read_text(encoding="utf-8"))
     assert sources

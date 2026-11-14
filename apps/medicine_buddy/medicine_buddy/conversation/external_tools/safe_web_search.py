@@ -22,9 +22,8 @@ logger = logging.getLogger(__name__)
 
 SEARCH_SPACE = "pollen-robotics/reachy-mini-search-tool"
 SEARCH_MCP_URL = "https://pollen-robotics-reachy-mini-search-tool.hf.space/gradio_api/mcp/"
-_WEB_SAFETY = (
-    Path(__file__).resolve().parents[3] / "apps" / "medicine_buddy" / "medicine_buddy" / "web_safety.py"
-)
+# medicine_buddy/conversation/external_tools/safe_web_search.py -> medicine_buddy/web_safety.py
+_WEB_SAFETY = Path(__file__).resolve().parents[2] / "web_safety.py"
 
 
 def _web_safety():

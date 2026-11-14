@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Only allow medicine changes the person actually asked for out loud "
-        "(prompt-injection protection; needs integrations/reachy_conversation/run_conversation.py)",
+        "(prompt-injection protection; the Reachy Mini app medicine_buddy.main turns it on itself)",
     )
     serve_cmd.set_defaults(func=cmd_serve)
 

@@ -35,6 +35,8 @@ class ScheduleMedicine(Tool):
     parameters_schema = {
         "type": "object",
         "properties": {
+            "person": {"type": "string", "description": "Whose medicines (the person's name). Omit only if there is just one person."},
+            "passphrase": {"type": "string", "description": "The passphrase of the person whose list it is (or the caregiver's), as just said. Only needed if the voice guard is off. Never repeat it aloud."},
             "name": {"type": "string", "description": "Medicine name, e.g. Aspirin"},
             "weekdays": {"type": "string", "description": "daily or weekday list"},
             "time": {"type": "string", "description": "Local time HH:MM"},
@@ -48,6 +50,8 @@ class ScheduleMedicine(Tool):
             "POST",
             "/schedules",
             {
+                "person": kwargs.get("person"),
+                "passphrase": kwargs.get("passphrase"),
                 "name": kwargs.get("name"),
                 "weekdays": kwargs.get("weekdays", "daily"),
                 "time": kwargs.get("time"),

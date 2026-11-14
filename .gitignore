@@ -20,3 +20,6 @@ apps/medicine_buddy/data/*.db-*
 # Taught arm waypoints (machine-specific)
 apps/medicine_buddy/data/waypoints/*.json
 !apps/medicine_buddy/data/waypoints/.gitkeep
+
+# Local settings (copy .env.example)
+.env

@@ -31,6 +31,7 @@ class MarkDoseTaken(Tool):
     parameters_schema = {
         "type": "object",
         "properties": {
+            "person": {"type": "string", "description": "Whose medicines (the person's name). Omit only if there is just one person."},
             "medicine_name": {"type": "string", "description": "Medicine name"},
             "taken": {
                 "type": "boolean",
@@ -46,6 +47,7 @@ class MarkDoseTaken(Tool):
             "POST",
             "/doses/adherence",
             {
+                "person": kwargs.get("person"),
                 "medicine_name": kwargs.get("medicine_name"),
                 "taken": bool(kwargs.get("taken", False)),
             },

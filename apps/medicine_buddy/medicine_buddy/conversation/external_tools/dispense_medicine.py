@@ -32,6 +32,7 @@ class DispenseMedicine(Tool):
     parameters_schema = {
         "type": "object",
         "properties": {
+            "person": {"type": "string", "description": "Whose medicines (the person's name). Omit only if there is just one person."},
             "medicine_name": {"type": "string", "description": "Medicine name to dispense"},
             "confirmed": {
                 "type": "boolean",
@@ -47,6 +48,7 @@ class DispenseMedicine(Tool):
             "POST",
             "/doses/run",
             {
+                "person": kwargs.get("person"),
                 "medicine_name": kwargs.get("medicine_name"),
                 "confirmed": bool(kwargs.get("confirmed", False)),
                 "stop_after_placed": True,

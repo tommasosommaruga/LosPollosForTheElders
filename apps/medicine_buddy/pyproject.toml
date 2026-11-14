@@ -3,12 +3,17 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "medicine-buddy"
-version = "0.1.0"
-description = "Reachy Mini + Maker Arm medicine reminder and dispense MVP"
+name = "medicine_buddy"  # = the Reachy Mini app name (must match the entry point below)
+version = "0.4.0"
+description = "Reachy Mini app: per-person medicine reminders, family memories and passphrase access control (Maker Arm dispense in dry-run)"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+keywords = ["reachy-mini-app"]
+dependencies = [
+    "reachy-mini>=1.11.0",
+    # Pollen's conversation app (speech in/out + tool calling), pinned to a release tag
+    "reachy_mini_conversation_app @ git+https://github.com/pollen-robotics/reachy_mini_conversation_app@v1.2.0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
@@ -16,12 +21,21 @@ dev = ["pytest>=8.0"]
 [project.scripts]
 medicine-buddy = "medicine_buddy.cli:main"
 
+# Makes it a Reachy Mini app: the daemon / Reachy Mini Control list and start it.
+[project.entry-points."reachy_mini_apps"]
+medicine_buddy = "medicine_buddy.main:MedicineBuddy"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["medicine_buddy*"]
 
 [tool.setuptools.package-data]
-medicine_buddy = ["medicine_catalog.json"]
+medicine_buddy = [
+    "medicine_catalog.json",
+    "conversation/external_tools/*.py",
+    "conversation/external_profiles/*/profile.md",
+    "conversation/lib/*.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -16,16 +16,16 @@ Do **not** reinvent TTS in Medicine Buddy when conversation app is available.
 
 ## Setup
 
-1. Arm PC: `medicine-buddy serve --host 0.0.0.0 --port 8787`
-2. Reachy PC `.env`:
-   - `MEDICINE_BUDDY_URL=http://<arm-pc-lan-ip>:8787`
-   - `REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY=.../integrations/reachy_conversation/external_tools`
-   - `REACHY_MINI_EXTERNAL_PROFILES_DIRECTORY=.../integrations/reachy_conversation/external_profiles`
-   - `REACHY_MINI_CUSTOM_PROFILE=medicine_caregiver`
-   - `AUTOLOAD_EXTERNAL_TOOLS=1`
-3. Start `reachy_mini_conversation_app` on the Reachy PC
+The Reachy Mini app `medicine_buddy.main:MedicineBuddy` wires this up for you: it sets the
+conversation app's env (tools + profile from `medicine_buddy/conversation/`, profile locked to
+`medicine_caregiver`), runs the API in-process and feeds speech transcripts to the voice guard.
 
-Details: `integrations/reachy_conversation/README.md`
+- Same machine: `python -m medicine_buddy.main --host <robot-ip>` (or on the robot via Reachy Mini Control).
+- Arm on a second PC: run `medicine-buddy serve --host 0.0.0.0 --port 8787` there and set
+  `MEDICINE_BUDDY_URL=http://<arm-pc-lan-ip>:8787` in `.env` where the app runs (note: the family page
+  and `/voice/heard` only accept requests from the same machine).
+
+Details: `README.md` → How to run
 
 ## Tools
 

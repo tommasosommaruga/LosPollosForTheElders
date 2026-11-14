@@ -99,78 +99,133 @@ hack_leurkerbad/
 ├── context.md                ← full product brainstorm
 ├── house-help-ideas.md       ← fetch / mobility / rehab ideas
 ├── DEMO_CHECKLIST.md
-├── scripts/
-│   ├── bootstrap.sh
-│   ├── run_robot_host.sh              # starts API + writes .env.generated
-│   └── run_conversation_with_medicine.sh
+├── .env.example              ← copy → .env (gitignored): robot IP, port, database…
+├── scripts/                  ← bash helpers (install / run / install on robot)
 ├── .cursor/skills/           # Cursor agent skills (one per subsystem)
-├── integrations/reachy_conversation/
-│   ├── README.md
-│   ├── external_tools/       # pollen external Tool modules
-│   ├── external_profiles/medicine_caregiver/
-│   └── lib/tool_http.py
-└── apps/medicine_buddy/      # Python package + tests
+└── apps/medicine_buddy/      # ★ THE REACHY MINI APP (Python package + tests)
+    ├── pyproject.toml        # entry point reachy_mini_apps: medicine_buddy
+    ├── README.md / index.html / style.css   # app-store metadata + landing page
     ├── medicine_buddy/
-    │   ├── api.py            # HTTP for conversation tools
+    │   ├── main.py           # ★ MedicineBuddy app: conversation app + API + voice guard
+    │   ├── conversation/     # voice tools + medicine_caregiver profile (bundled)
+    │   ├── api.py            # HTTP API, status page /, family settings /family
+    │   ├── access.py         # people, passphrases, access control, family memories
+    │   ├── voice_guard.py / web_safety.py / settings.py / catalog.py
     │   ├── orchestrator.py   # DoseStateMachine
     │   ├── db.py / states.py / scheduler.py / voice_setup.py
     │   ├── ports.py          # ★ contracts for arm/vision team
     │   ├── dry_run.py        # FakeVision / FakeArm / FakeAdherence
-    │   ├── silent_buddy.py   # no TTS — conversation speaks
-    │   ├── vision_ocr.py     # hardware stub
-    │   ├── arm_controller.py # waypoint load + SDK stub
+    │   ├── vision_ocr.py / arm_controller.py   # hardware stubs
     │   └── …
     └── tests/
 ```
 
 ---
 
-## Quick start
+## How to run
 
-### Local dry-run (no robots)
+Medicine Buddy is a **Reachy Mini app** (`apps/medicine_buddy`). One process runs everything:
+Pollen's conversation app (listening / speaking) with the locked `medicine_caregiver` profile and our
+voice tools, the Medicine Buddy API + pages on `127.0.0.1:8787`, and the voice guard.
+
+You need Python 3.11+ (3.12 recommended), Git, and the robot on the same network as your computer.
+
+### 1. Install (once, and after every `git pull`)
 
 ```bash
 cd apps/medicine_buddy
-python3 -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+```
+
+Activate it - Windows: `.venv\Scripts\activate` · macOS/Linux: `source .venv/bin/activate` - then:
+
+```bash
 pip install -e ".[dev]"
-printf 'yes\nyes\nyes\n' | medicine-buddy demo --dry-run
-pytest
 ```
 
-### Robot host PC (Reachy connected — pull and run)
+This also installs `reachy-mini` and Pollen's conversation app (pinned to v1.2.0).
+
+### 2. Configure (once)
+
+Copy `.env.example` to `.env` in the repo root and set `REACHY_HOST` to the robot's address.
+On Windows `reachy-mini.local` may resolve to IPv6 and fail - use the robot's IPv4 address
+(e.g. from Reachy Mini Control, or `python -c "import socket; print(socket.gethostbyname('reachy-mini.local'))"`).
+
+### 3a. Run on the robot from Reachy Mini Control (Wireless)
+
+Install the app into the robot's app environment (robot needs internet; the SSH password is in Pollen's
+Wireless guide). Run this from your computer:
 
 ```bash
-git pull
-./scripts/bootstrap.sh                         # once
-./scripts/run_robot_host.sh                    # terminal 1 — API :8787
-./scripts/run_conversation_with_medicine.sh    # terminal 2 — pollen TTS
+ssh pollen@reachy-mini.local "/venvs/apps_venv/bin/pip install --upgrade 'medicine_buddy @ git+https://github.com/tommasosommaruga/LosPollosForTheElders@main#subdirectory=apps/medicine_buddy'"
 ```
 
-Requires pollen [`reachy_mini_conversation_app`](https://github.com/pollen-robotics/reachy_mini_conversation_app) on PATH as `reachy-mini-conversation-app` (or set `REACHY_CONVERSATION_CMD`).
-
-Voice tools: `schedule_medicine` · `update_medicine_schedule` · `delete_medicine_schedule` · `list_medicines` · `check_due_medicines` · `dispense_medicine` · `mark_dose_taken`
-
-**Recommended (any OS, with prompt-injection protection):**
+(Replace `main` with a branch name to test a branch.) Then open **Reachy Mini Control → Applications →
+Medicine Buddy → Start**. Or start it over the robot's REST API:
 
 ```bash
-# terminal 1
-cd apps/medicine_buddy && medicine-buddy serve --host 127.0.0.1 --port 8787 --dry-run --voice-guard
-# terminal 2 (conversation app's python)
-python integrations/reachy_conversation/run_conversation.py --host <robot-ip>
+curl -X POST http://reachy-mini.local:8000/api/apps/start-app/medicine_buddy
 ```
 
-`run_conversation.py` loads the tools/profile, targets the robot by IP, and forwards the person's
-speech transcripts to `POST /voice/heard`. With `--voice-guard`, add/update/delete only go through if
-the person named that medicine out loud recently, and delete/dispense also need a spoken "yes" after
-Reachy asked — so instructions hidden in web results, camera images or memory can't change medicines.
-`safe_web_search` gives Reachy internet search with cleaned, untrusted-labelled snippets (no links,
-no page fetching). Blocked attempts show on the status page.
+To make it start when the robot wakes up (or an antenna is touched):
 
-Medicine names are restricted to [`medicine_catalog.json`](apps/medicine_buddy/medicine_buddy/medicine_catalog.json)
-(with aliases and spelling-tolerant matching for speech-to-text slips); unknown names are refused with suggestions.
-Status page: http://127.0.0.1:8787/
+```bash
+curl -X PUT http://reachy-mini.local:8000/api/apps/startup-app -H "Content-Type: application/json" -d "{\"startup_app\": \"medicine_buddy\"}"
+```
 
-More: [`integrations/reachy_conversation/README.md`](integrations/reachy_conversation/README.md)
+On the robot, the database lives in `~/.local/share/medicine-buddy/` (kept across app updates). The status
+and family pages only listen on the robot itself; open them from your computer through an SSH tunnel:
+
+```bash
+ssh -L 8787:127.0.0.1:8787 pollen@reachy-mini.local
+```
+
+then browse to http://127.0.0.1:8787/ and http://127.0.0.1:8787/family.
+
+### 3b. Run from your computer (development, or Reachy Mini Lite)
+
+With the venv active, from the repo root:
+
+```bash
+python -m medicine_buddy.main
+```
+
+It uses `REACHY_HOST` from `.env`; or pass it: `python -m medicine_buddy.main --host 192.168.1.42`.
+Stop with Ctrl+C. Pages: http://127.0.0.1:8787/ (status) and http://127.0.0.1:8787/family (passphrases).
+Make sure the app is **not** also running on the robot - only one app can drive Reachy at a time.
+
+### Other commands
+
+```bash
+pytest                                                   # 178 tests (in apps/medicine_buddy)
+medicine-buddy serve --dry-run --voice-guard             # only the API + pages, no robot
+printf 'yes\nyes\nyes\n' | medicine-buddy demo --dry-run # console demo of the dose pipeline
+reachy-mini-app-assistant check apps/medicine_buddy      # validate the app package
+```
+
+### What you can say to Reachy
+
+- *"Add aspirin for Mario every day at 9 AM"* - needs **Mario's** passphrase (or the caregiver's); the
+  first time, Reachy asks Mario to choose one and **say it twice**.
+- *"Move Mario's aspirin to 8 PM"* / *"Stop the aspirin reminder"* (asks for confirmation).
+- *"What medicines does Nonna Rosa take?"* · *"Is any medicine due?"* · *"I took it"*.
+- Tell a story or recipe - Reachy asks whether to **save it in your memories**; later the grandchildren
+  can ask *"Tell me a story Grandpa Mario told you"*.
+- *"What's the weather in Geneva?"* - safe web search.
+
+Passphrases are **changed on the Family settings page** (typed, never spoken). Medicine names are
+limited to [`medicine_catalog.json`](apps/medicine_buddy/medicine_buddy/medicine_catalog.json).
+
+### Security in one paragraph
+
+Each person's passphrase protects their own timetable and memories (the caregiver's works for everyone);
+only a salted PBKDF2 hash is stored. The **voice guard** accepts medicine changes only when the speech
+recognizer heard the person themselves (medicine named, "yes" after the question, passphrase spoken in the
+last 5 minutes), so text from web pages, camera images or the AI's memory can't change anything. Web
+results are cleaned and labelled untrusted. The local API refuses requests from other websites and DNS
+rebinding; the family page only works on the machine running the app. Known limits: reading memories and
+medicines is open to anyone talking to the robot, and the conversation app's console log prints what was
+said and tool arguments (which can include a spoken passphrase) - keep those logs private.
 
 ---
 
@@ -189,6 +244,12 @@ Default: `http://127.0.0.1:8787`
 | POST | `/schedules/update` | `{name, [time], [new_time], [new_weekdays]}` — change a schedule; read back + confirmed |
 | POST | `/schedules/delete` | `{name, confirmed, [time], [all]}` — stop reminders (soft delete, history kept) |
 | POST | `/voice/heard` | `{text}` — person's speech from the launcher; **loopback only**, no AI tool calls it |
+| POST | `/people/register` | `{name, role, passphrase, passphrase_repeat, [caregiver_passphrase]}` |
+| POST | `/people/list` | Registered names, roles, counts (never passphrases) |
+| POST | `/medicines/list` | `{[person]}` — one person's (or everyone's) medicines |
+| POST | `/memories/save` | `{person, kind, title, text, [passphrase]}` |
+| POST | `/memories/recall` | `{person, [kind], [topic]}` — open to family |
+| POST | `/memories/forget` | `{person, memory_id, confirmed, [passphrase]}` |
 | GET | `/security` | Voice guard status + recently blocked actions |
 | POST | `/doses/run` | `{medicine_name, confirmed, stop_after_placed?}` |
 | POST | `/doses/adherence` | `{medicine_name, taken}` |

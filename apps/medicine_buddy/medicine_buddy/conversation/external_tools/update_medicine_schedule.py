@@ -34,6 +34,8 @@ class UpdateMedicineSchedule(Tool):
     parameters_schema = {
         "type": "object",
         "properties": {
+            "person": {"type": "string", "description": "Whose medicines (the person's name). Omit only if there is just one person."},
+            "passphrase": {"type": "string", "description": "The passphrase of the person whose list it is (or the caregiver's), as just said. Only needed if the voice guard is off. Never repeat it aloud."},
             "name": {"type": "string", "description": "Medicine name as the person said it"},
             "time": {"type": "string", "description": "Optional: the CURRENT time of the schedule to change, e.g. '09:00' or '9 AM'"},
             "new_time": {"type": "string", "description": "Optional: new time, e.g. '20:00' or '8 PM'"},
@@ -44,7 +46,7 @@ class UpdateMedicineSchedule(Tool):
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         del deps
-        body = {k: kwargs.get(k) for k in ("name", "time", "new_time", "new_weekdays") if kwargs.get(k)}
+        body = {k: kwargs.get(k) for k in ("name", "time", "new_time", "new_weekdays", "person", "passphrase") if kwargs.get(k)}
         payload = _api_request("POST", "/schedules/update", body)
         logger.info("update_medicine_schedule → %s", payload)
         return payload

@@ -15,9 +15,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from medicine_buddy.access import PeopleAccessMixin
+from medicine_buddy.family_page import render_family_page
+from medicine_buddy.settings import SettingsMixin
 from medicine_buddy.catalog import MedicineCatalog
 from medicine_buddy.config import AppConfig
-from medicine_buddy.db import Database, Medicine, Schedule
+from medicine_buddy.db import Database, Medicine, Person, Schedule
 from medicine_buddy.dry_run import FakeAdherence, FakeArm, FakeVision
 from medicine_buddy.orchestrator import DoseStateMachine
 from medicine_buddy.scheduler import find_due_doses
@@ -39,7 +42,11 @@ def _schedule_json(s: Schedule) -> dict[str, Any]:
     return {"id": s.id, "weekdays": s.weekdays, "time_hhmm": s.time_hhmm, "spoken": _when(s)}
 
 
-class MedicineBuddyService:
+def _whose(person: Person | None) -> str:
+    return f" for {person.name}" if person else ""
+
+
+class MedicineBuddyService(PeopleAccessMixin, SettingsMixin):
     def __init__(
         self,
         db_path: Path,
@@ -53,7 +60,12 @@ class MedicineBuddyService:
         # Disabled unless the server is started with --voice-guard (needs the launcher
         # that forwards the person's speech transcripts to POST /voice/heard).
         self.guard = guard or VoiceGuard(self.catalog, enabled=False)
+        self.guard.identify = self._identify_speakers  # recognise spoken passphrases
         self._lock = threading.Lock()  # serializes multi-step operations
+        self._init_settings()
+
+    def family_page(self) -> str:
+        return render_family_page(self.settings_token)
 
     # ------------------------------------------------------------ voice guard input
     def voice_heard(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -75,7 +87,7 @@ class MedicineBuddyService:
             "status": "ok",
             "dry_run": self.config.dry_run,
             "service": "medicine-buddy",
-            "version": "0.2.0",
+            "version": "0.3.0",
         }
 
     # ------------------------------------------------------------ catalog
@@ -98,40 +110,67 @@ class MedicineBuddyService:
             "speak_hint": hint,
         }
 
-    def _known_medicine(self, spoken: Any) -> tuple[Medicine | None, dict[str, Any] | None]:
+    def _known_medicine(
+        self, spoken: Any, person: Person | None = None
+    ) -> tuple[Medicine | None, dict[str, Any] | None]:
         name, err = self._recognize(spoken)
         if err:
             return None, err
-        medicine = self.db.get_medicine_by_name(name)
+        medicine = self.db.get_medicine_by_name(name, person.id if person else None)
         if medicine is None:
+            who = f"{person.name} doesn't" if person else "You don't"
             return None, {
-                "error": f"no schedule saved for {name}",
-                "speak_hint": f"You don't have any reminders set up for {name} yet.",
+                "error": f"no schedule saved for {name}{_whose(person)}",
+                "speak_hint": f"{who} have any reminders set up for {name} yet.",
             }
         return medicine, None
 
+    def _person_names(self) -> dict[int, str]:
+        return {p.id: p.name for p in self.db.list_people()}
+
     # ------------------------------------------------------------ reading
-    def list_medicines(self) -> dict[str, Any]:
-        meds = self.db.list_medicines()
+    def list_medicines(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """All medicines, or one person's when body has `person`."""
+        body = body or {}
+        only: Person | None = None
+        if body.get("person"):
+            only, err = self._resolve_person(body.get("person"))
+            if err:
+                return err
+        names = self._person_names()
         by_med: dict[int, list[dict[str, Any]]] = {}
         for schedule in self.db.list_active_schedules():
             by_med.setdefault(schedule.medicine_id, []).append(_schedule_json(schedule))
-        listed = [{"id": m.id, "name": m.name, "schedules": by_med[m.id]} for m in meds if m.id in by_med]
+        meds = self.db.list_medicines(only.id if only else None, all_people=only is None)
+        listed = [
+            {"id": m.id, "name": m.name, "person": names.get(m.person_id), "schedules": by_med[m.id]}
+            for m in meds if m.id in by_med
+        ]
         if listed:
-            hint = "Your medicines: " + "; ".join(
-                f"{m['name']} {', and '.join(s['spoken'] for s in m['schedules'])}" for m in listed
-            ) + "."
+            def line(m: dict[str, Any]) -> str:
+                who = f" ({m['person']})" if m["person"] and not only else ""
+                return f"{m['name']}{who} {', and '.join(s['spoken'] for s in m['schedules'])}"
+            owner = f"{only.name}'s" if only else "Your"
+            hint = f"{owner} medicines: " + "; ".join(line(m) for m in listed) + "."
         else:
-            hint = "You don't have any medicine reminders set up yet."
+            hint = f"There are no medicine reminders{_whose(only)} yet."
         return {"medicines": listed, "speak_hint": hint}
 
     def due(self) -> dict[str, Any]:
         items = find_due_doses(self.db)
+        names = self._person_names()
+        owner = {m.id: names.get(m.person_id) for m in self.db.list_medicines()}
+
+        def say(d) -> str:
+            who = f" for {owner[d.medicine_id]}" if owner.get(d.medicine_id) else ""
+            return f"{d.medicine_name}{who} ({describe_time(d.time_hhmm)})"
+
         return {
             "due": [
                 {
                     "medicine_id": d.medicine_id,
                     "medicine_name": d.medicine_name,
+                    "person": owner.get(d.medicine_id),
                     "schedule_id": d.schedule_id,
                     "time_hhmm": d.time_hhmm,
                 }
@@ -140,8 +179,7 @@ class MedicineBuddyService:
             "speak_hint": (
                 "No medicines are due right now."
                 if not items
-                else "Due now: "
-                + ", ".join(f"{d.medicine_name} ({describe_time(d.time_hhmm)})" for d in items)
+                else "Due now: " + ", ".join(say(d) for d in items)
                 + ". Ask the person if you should bring it, then call dispense_medicine."
             ),
         }
@@ -160,12 +198,15 @@ class MedicineBuddyService:
             time_hhmm = parse_time_hhmm(time_raw)
         except ValueError as exc:
             return {"error": str(exc), "speak_hint": f"Sorry, I didn't understand that time or day. {exc}."}
-        blocked = self.guard.require_mention("add schedule", name)
+        person, err = self._resolve_person(body.get("person"), for_change=True)
+        if err:
+            return err
+        blocked = self._require_owner("add schedule", body, person) or self.guard.require_mention("add schedule", name)
         if blocked:
             return blocked
 
         with self._lock:
-            medicine = self.db.add_medicine(name)
+            medicine = self.db.add_medicine(name, person.id if person else None)
             existing = self.db.find_active_schedule(medicine.id, weekdays, time_hhmm)
             if existing is not None:
                 return {
@@ -174,13 +215,15 @@ class MedicineBuddyService:
                     "verified": True,
                     "medicine": {"id": medicine.id, "name": medicine.name},
                     "schedule": _schedule_json(existing),
-                    "speak_hint": f"{medicine.name} {_when(existing)} was already set up, so nothing changed.",
+                    "speak_hint": (f"{medicine.name}{_whose(person)} {_when(existing)} was already set up, "
+                                   "so nothing changed."),
                 }
             schedule = self.db.add_schedule(medicine.id, weekdays, time_hhmm)
-            return self._verified(medicine, schedule.id, weekdays, time_hhmm, "is set up")
+            return self._verified(medicine, schedule.id, weekdays, time_hhmm, "is set up", person)
 
     def _verified(
-        self, medicine: Medicine, schedule_id: int, weekdays: str, time_hhmm: str, verb: str
+        self, medicine: Medicine, schedule_id: int, weekdays: str, time_hhmm: str, verb: str,
+        person: Person | None = None,
     ) -> dict[str, Any]:
         """Read the schedule back from the database and confirm it matches what was asked."""
         stored = self.db.get_schedule(schedule_id)
@@ -200,8 +243,9 @@ class MedicineBuddyService:
             "status": "ok",
             "verified": True,
             "medicine": {"id": medicine.id, "name": medicine.name},
+            "person": person.name if person else None,
             "schedule": _schedule_json(stored),
-            "speak_hint": f"Done. {medicine.name} {verb} correctly: {_when(stored)}.",
+            "speak_hint": f"Done. {medicine.name}{_whose(person)} {verb} correctly: {_when(stored)}.",
         }
 
     def _pick_schedules(
@@ -248,12 +292,16 @@ class MedicineBuddyService:
         name, err = self._recognize(body.get("name"))
         if err:
             return err
-        blocked = self.guard.require_mention("update schedule", name)
+        person, err = self._resolve_person(body.get("person"), for_change=True)
+        if err:
+            return err
+        blocked = (self._require_owner("update schedule", body, person)
+                   or self.guard.require_mention("update schedule", name))
         if blocked:
             return blocked
 
         with self._lock:
-            medicine, err = self._known_medicine(name)
+            medicine, err = self._known_medicine(name, person)
             if err:
                 return err
             picked, err = self._pick_schedules(medicine, body.get("time"))
@@ -274,7 +322,7 @@ class MedicineBuddyService:
                 return {"error": "that schedule already exists",
                         "speak_hint": f"{medicine.name} is already set {_when(clash)}."}
             self.db.update_schedule(target.id, weekdays=weekdays, time_hhmm=time_hhmm)
-            return self._verified(medicine, target.id, weekdays, time_hhmm, "is now set up")
+            return self._verified(medicine, target.id, weekdays, time_hhmm, "is now set up", person)
 
     def delete_schedule(self, body: dict[str, Any]) -> dict[str, Any]:
         """Stop reminders for a medicine. Needs confirmed=true (Reachy must ask first).
@@ -284,12 +332,16 @@ class MedicineBuddyService:
         name, err = self._recognize(body.get("name"))
         if err:
             return err
-        blocked = self.guard.require_mention("delete schedule", name)
+        person, err = self._resolve_person(body.get("person"), for_change=True)
+        if err:
+            return err
+        blocked = (self._require_owner("delete schedule", body, person)
+                   or self.guard.require_mention("delete schedule", name))
         if blocked:
             return blocked
 
         with self._lock:
-            medicine, err = self._known_medicine(name)
+            medicine, err = self._known_medicine(name, person)
             if err:
                 return err
             picked, err = self._pick_schedules(medicine, body.get("time"))
@@ -346,7 +398,10 @@ class MedicineBuddyService:
         spoken = body.get("medicine_name") or body.get("name")
         if not spoken:
             return None, {"error": "medicine_id or medicine_name required"}
-        return self._known_medicine(spoken)
+        person, err = self._resolve_person(body.get("person"), strict=True)
+        if err:
+            return None, err
+        return self._known_medicine(spoken, person)
 
     def run_dose(self, body: dict[str, Any]) -> dict[str, Any]:
         """Dispense to bowl. TTS stays on conversation app; return speak_hint only."""
@@ -471,17 +526,36 @@ class MedicineBuddyService:
     # ------------------------------------------------------------ status page
     def status_page(self) -> str:
         esc = html.escape
-        names = {m.id: m.name for m in self.db.list_medicines()}
+        meds = self.db.list_medicines()
+        names = {m.id: m.name for m in meds}
+        people = self.db.list_people()
+        person_name = {p.id: p.name for p in people}
+        owner = {m.id: person_name.get(m.person_id, "unassigned") for m in meds}
         schedules = self.db.list_active_schedules()
         due_ids = {d.schedule_id for d in find_due_doses(self.db)}
         events = self.db.list_dose_events()[-30:][::-1]
 
         rows = "".join(
-            f"<tr{' class=due' if s.id in due_ids else ''}><td>{esc(names.get(s.medicine_id, '?'))}</td>"
+            f"<tr{' class=due' if s.id in due_ids else ''}><td>{esc(owner.get(s.medicine_id, '?'))}</td>"
+            f"<td>{esc(names.get(s.medicine_id, '?'))}</td>"
             f"<td>{esc(describe_time(s.time_hhmm))}</td><td>{esc(describe_weekdays(s.weekdays))}</td>"
             f"<td>{'Due now' if s.id in due_ids else ''}</td><td class=muted>#{s.id}</td></tr>"
             for s in schedules
-        ) or "<tr><td colspan=5 class=muted>No schedules yet. Ask Reachy to set one up.</td></tr>"
+        ) or "<tr><td colspan=6 class=muted>No schedules yet. Ask Reachy to set one up.</td></tr>"
+
+        people_rows = "".join(
+            f"<tr><td>{esc(p.name)}</td><td>{'Caregiver' if p.is_caregiver else 'Family member'}</td>"
+            f"<td>{len(self.db.list_medicines(p.id, all_people=False))}</td>"
+            f"<td>{len(self.db.list_memories(p.id))}</td></tr>"
+            for p in people
+        ) or ("<tr><td colspan=4 class=muted>Nobody registered: open mode, anyone can change medicines. "
+              "Ask Reachy to register the caregiver first.</td></tr>")
+        mem_rows = "".join(
+            f"<tr><td class=muted>{esc(m.created_at[:10])}</td><td>{esc(person_name.get(m.person_id, '?'))}</td>"
+            f"<td>{esc(m.kind)}</td><td><details><summary>{esc(m.title)}</summary>"
+            f"<div class=memtext>{esc(m.text)}</div></details></td></tr>"
+            for m in self.db.list_memories(limit=50)
+        ) or "<tr><td colspan=4 class=muted>No memories saved yet.</td></tr>"
 
         def local(ts: str) -> str:
             try:
@@ -513,13 +587,14 @@ class MedicineBuddyService:
         ) or "<tr><td colspan=3 class=muted>Nothing blocked.</td></tr>"
 
         return _PAGE.format(rows=rows, log=log, chips=chips, mode=esc(mode), guard=guard_line,
-                            blocked=blocked, now=datetime.now().strftime("%H:%M:%S"))
+                            blocked=blocked, people=people_rows, memories=mem_rows,
+                            now=datetime.now().strftime("%H:%M:%S"))
 
 
 _PAGE = """<!doctype html>
 <html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
-<meta http-equiv=refresh content=5>
+<meta http-equiv=refresh content=15>
 <title>Medicine Buddy</title>
 <style>
 :root{{--bg:#f7f7f5;--card:#fff;--fg:#1d1d1b;--muted:#77756f;--line:#e4e2dc;--accent:#2f6f4f;--due:#fff4d6}}
@@ -535,10 +610,13 @@ tr.due td{{background:var(--due)}} .muted{{color:var(--muted)}}
 .chip{{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:3px 10px;margin:0 6px 6px 0}}
 .st{{font-weight:600}} .st-taken{{color:var(--accent)}} .st-missed,.st-failed{{color:#c0392b}}
 .ok{{color:var(--accent)}} .warn{{color:#c0392b}} code{{font-size:13px}}
+summary{{cursor:pointer}} .memtext{{white-space:pre-wrap;margin-top:6px;color:var(--fg)}}
 </style></head><body><main>
-<h1>Medicine Buddy</h1>
-<div class=sub>Mode: {mode} &middot; updated {now} &middot; refreshes every 5 s</div>
-<section><h2>Schedules</h2><table><tr><th>Medicine</th><th>Time</th><th>Days</th><th></th><th></th></tr>{rows}</table></section>
+<h1>Medicine Buddy <a href="/family" style="font-size:14px;font-weight:500;margin-left:10px;color:var(--accent)">Family settings &rarr;</a></h1>
+<div class=sub>Mode: {mode} &middot; updated {now} &middot; refreshes every 15 s</div>
+<section><h2>People</h2><table><tr><th>Name</th><th>Role</th><th>Medicines</th><th>Memories</th></tr>{people}</table></section>
+<section><h2>Schedules</h2><table><tr><th>Person</th><th>Medicine</th><th>Time</th><th>Days</th><th></th><th></th></tr>{rows}</table></section>
+<section><h2>Family memories</h2><table><tr><th>Saved</th><th>From</th><th>Kind</th><th>Title (click to read)</th></tr>{memories}</table></section>
 <section><h2>Allowed medicines</h2>{chips}</section>
 <section><h2>Recent doses</h2><table><tr><th>When</th><th>Medicine</th><th>State</th><th>Detail</th></tr>{log}</table></section>
 <section><h2>Security</h2><p>{guard}</p><table><tr><th>When</th><th>Blocked action</th><th>Why</th></tr>{blocked}</table></section>
@@ -564,10 +642,21 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 
 def _send(handler: BaseHTTPRequestHandler, code: int, body: bytes, content_type: str) -> None:
+    # No Access-Control-Allow-Origin: other websites must not be able to call this API
+    # from the user's browser (it used to send "*", which allowed exactly that).
     handler.send_response(code)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.send_header("X-Frame-Options", "DENY")
+    handler.send_header("Referrer-Policy", "no-referrer")
+    if content_type.startswith("text/html"):
+        handler.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+            "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        )
+        handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -584,6 +673,19 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/doses/run": service.run_dose,
         "/doses/adherence": service.mark_adherence,
         "/voice/heard": service.voice_heard,  # loopback only, see _post
+        "/medicines/list": service.list_medicines,
+        "/people/register": service.register_person,
+        "/people/list": service.list_people_info,
+        "/memories/save": service.save_memory,
+        "/memories/recall": service.recall_memories,
+        "/memories/forget": service.forget_memory,
+    }
+    # Typed on the Family settings page only: never reachable by an AI tool.
+    settings_routes = {
+        "/settings/people": service.settings_people,
+        "/settings/suggest": service.settings_suggest,
+        "/settings/register": service.settings_register,
+        "/settings/passphrase": service.settings_change_passphrase,
     }
     loopback = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 
@@ -591,12 +693,30 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
             print(f"[api] {self.address_string()} - {format % args}")
 
+        def _own_hosts(self) -> set[str]:
+            port = self.server.server_address[1]
+            return {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+
+        def _foreign_origin(self) -> bool:
+            """True for requests a different website made from the user's browser (CSRF).
+            Tools and scripts send no Origin header and are unaffected."""
+            if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+                return True
+            origin = self.headers.get("Origin")
+            if origin is None:
+                return False
+            # Only our own pages, addressed as localhost. (Trusting the Host header here would
+            # let a DNS-rebinding site that points its name at 127.0.0.1 through.)
+            return urlparse(origin).netloc.lower() not in self._own_hosts()
+
+        def _local_page_request(self) -> bool:
+            """Family page / settings: this computer, addressed as localhost (blocks DNS rebinding)."""
+            return (self.client_address[0] in loopback
+                    and str(self.headers.get("Host", "")).lower() in self._own_hosts())
+
         def do_OPTIONS(self) -> None:  # noqa: N802
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.end_headers()
+            # No cross-origin access is offered, so pre-flight requests are always refused.
+            _send_json(self, 403, {"error": "cross-origin requests are not allowed"})
 
         def do_GET(self) -> None:  # noqa: N802
             try:
@@ -614,6 +734,13 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
             path = urlparse(self.path).path.rstrip("/") or "/"
             if path == "/":
                 _send(self, 200, service.status_page().encode("utf-8"), "text/html; charset=utf-8")
+                return
+            if path == "/family":
+                if not self._local_page_request():
+                    _send_json(self, 403, {"error": "the family settings page only opens on this computer "
+                                                    "at http://127.0.0.1:<port>/family"})
+                    return
+                _send(self, 200, service.family_page().encode("utf-8"), "text/html; charset=utf-8")
                 return
             simple = {
                 "/health": service.health,
@@ -639,10 +766,25 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
 
         def _post(self) -> None:
             path = urlparse(self.path).path.rstrip("/") or "/"
+            if self._foreign_origin():
+                _send_json(self, 403, {"error": "requests from other websites are not allowed"})
+                return
+            if path in settings_routes:
+                if not self._local_page_request() or not service.check_settings_token(
+                        self.headers.get("X-Family-Token")):
+                    _send_json(self, 403, {"error": "settings can only be changed from the family page on this computer"})
+                    return
+                if not str(self.headers.get("Content-Type", "")).startswith("application/json"):
+                    _send_json(self, 415, {"error": "JSON expected"})
+                    return
             try:
                 body = _read_json(self)
             except (json.JSONDecodeError, ValueError) as exc:
                 _send_json(self, 400, {"error": f"invalid JSON: {exc}"})
+                return
+            if path in settings_routes:
+                payload = settings_routes[path](body)
+                _send_json(self, 400 if "error" in payload else 200, payload)
                 return
             route = post_routes.get(path)
             if route is None:
@@ -655,6 +797,23 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
             _send_json(self, 400 if "error" in payload else 200, payload)
 
     return Handler
+
+
+def start_server(
+    host: str,
+    port: int,
+    db_path: Path,
+    config: AppConfig | None = None,
+    voice_guard: bool = False,
+) -> tuple[MedicineBuddyService, ThreadingHTTPServer, threading.Thread]:
+    """Start the API in a background thread (used by the Reachy Mini app). Stop with
+    `server.shutdown(); service.close()`."""
+    catalog = MedicineCatalog.load()
+    service = MedicineBuddyService(db_path, config, catalog, VoiceGuard(catalog, enabled=voice_guard))
+    server = ThreadingHTTPServer((host, port), make_handler(service))
+    thread = threading.Thread(target=server.serve_forever, name="medicine-buddy-api", daemon=True)
+    thread.start()
+    return service, server, thread
 
 
 def serve(

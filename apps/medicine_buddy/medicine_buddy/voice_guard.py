@@ -29,6 +29,8 @@ from medicine_buddy.catalog import MedicineCatalog
 MENTION_WINDOW = 180.0
 CONFIRM_WINDOW = 120.0
 RECENT_WINDOW = 120.0
+AUTH_WINDOW = 300.0  # a spoken passphrase unlocks that person for 5 minutes
+TEXT_RETENTION = 300.0  # transcript text is kept in memory only, and only this long
 # Speech-to-text can finish slightly AFTER the AI calls the tool, so wait a moment.
 TRANSCRIPT_GRACE = 5.0
 
@@ -52,6 +54,7 @@ class Utterance:
     text: str
     medicines: set[str]
     yes: bool
+    authenticated: set[int] = field(default_factory=set)  # person ids whose passphrase was said
 
 
 @dataclass
@@ -67,6 +70,8 @@ class VoiceGuard:
     enabled: bool = True
     clock: Callable[[], float] = time.monotonic
     grace: float = TRANSCRIPT_GRACE
+    # text -> ids of people whose passphrase occurs in it (set by the service)
+    identify: Callable[[str], set[int]] = lambda text: set()
     _heard: deque = field(default_factory=lambda: deque(maxlen=100))
     _pending: dict[str, Pending] = field(default_factory=dict)
     blocked: deque = field(default_factory=lambda: deque(maxlen=20))
@@ -75,11 +80,46 @@ class VoiceGuard:
     # ---- input from the launcher (the person's real speech)
     def heard(self, text: str) -> Utterance:
         text = (text or "").strip()
-        u = Utterance(self.clock(), text, self.catalog.find_in_text(text), is_affirmative(text))
+        u = Utterance(self.clock(), text, self.catalog.find_in_text(text), is_affirmative(text),
+                      self.identify(text))
         with self._cond:
+            now = self.clock()
+            for old in self._heard:  # forget old wording (may contain passphrases)
+                if now - old.at > TEXT_RETENTION:
+                    old.text = ""
             self._heard.append(u)
             self._cond.notify_all()
         return u
+
+    # ---- passphrases
+    def authenticated(self) -> set[int]:
+        """People whose passphrase a human said within AUTH_WINDOW."""
+        now = self.clock()
+        return {pid for u in self._heard if now - u.at <= AUTH_WINDOW for pid in u.authenticated}
+
+    def reidentify(self) -> None:
+        """Re-check recent speech after someone new registered: the passphrase they just
+        said while registering should count straight away (no need to say it a third time)."""
+        now = self.clock()
+        with self._cond:
+            for u in self._heard:
+                if u.text and now - u.at <= AUTH_WINDOW:
+                    u.authenticated = self.identify(u.text)
+            self._cond.notify_all()
+
+    def wait_authenticated(self, wanted: Callable[[set[int]], bool]) -> bool:
+        return self._wait_for(lambda: wanted(self.authenticated()))
+
+    def times_said(self, matcher: Callable[[str], bool], window: float = MENTION_WINDOW) -> int:
+        """How many separate recent utterances satisfy `matcher` (used for 'say it twice')."""
+        now = self.clock()
+        return sum(1 for u in self._heard if u.text and now - u.at <= window and matcher(u.text))
+
+    def wait_times_said(self, matcher: Callable[[str], bool], count: int) -> bool:
+        return self._wait_for(lambda: self.times_said(matcher) >= count)
+
+    def refuse(self, action: str, reason: str, speak: str) -> dict[str, Any]:
+        return self._refuse(action, reason, speak)
 
     def _wait_for(self, predicate: Callable[[], bool]) -> bool:
         deadline = time.monotonic() + self.grace

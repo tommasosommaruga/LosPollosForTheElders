@@ -46,6 +46,15 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Passes `reachy-mini-app-assistant check`
 - Per-person access: each person's passphrase protects their own timetable (caregiver = override); first-time setup by voice; changes on the Family settings page
 
+## v0.5 - P0 fixes from the audit (done)
+
+- Proactive reminders (`reminders.py` + `speaker.py` via the conversation app's `conversation.say`): spoken when due, repeat every 10 min up to 3x, Missed after 60 min; never interrupts a conversation
+- "I took it" works with no dispense (Due/Reminded -> Taken/Missed); simulated arm no longer crashes on narrow console encodings and says it is demo mode
+- Time zone setting (Family page / `MEDICINE_BUDDY_TZ`), used by the scheduler (DST + local weekday aware)
+- Tests: `test_p0_fixes.py`, `test_timezone.py`, `test_reminders.py` (incl. the real JSON-RPC server)
+- Names (`names.py`): one canonical key (case, accents, NFC/NFD, spacing) - "Nicolo" / "NICOLO" / "Nicolo" can no longer be two people; unique index + safe migration of existing databases (nothing deleted; duplicates flagged in the log); titles ("grandpa", "nonna") are stripped; a longer name such as "Mario Bianchi" is no longer silently treated as "Mario"; nameless registrations are rejected instead of crashing
+- Robot CPU: passphrase spotting is lazy + cached (newest sentence first, stops early, never on the audio path): ~2 ms per sentence instead of ~530 ms on a laptop (the robot's CPU is several times slower); dashboard/debug use COUNT queries and limits
+
 ## Open questions (answer when ready)
 
 - [ ] Which medicines belong in the catalog for the demo? (currently 10 common ones; tray has Aspirin + Vitamin D)

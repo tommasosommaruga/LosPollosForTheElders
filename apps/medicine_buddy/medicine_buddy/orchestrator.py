@@ -5,7 +5,7 @@ from __future__ import annotations
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database
 from medicine_buddy.ports import AdherencePort, ArmPort, BuddyPort, VisionPort
-from medicine_buddy.states import DoseState
+from medicine_buddy.states import TERMINAL_STATES, DoseState
 
 
 class DoseStateMachine:
@@ -93,7 +93,10 @@ class DoseStateMachine:
         try:
             self.arm.replay_slot_to_bowl(match.slot_id)
         except Exception as exc:  # noqa: BLE001 — surface hardware faults as Failed
-            self.buddy.speak("The arm failed while moving. Please check the e-stop.")
+            if self.config.dry_run:  # simulated arm: a software fault, nothing physical moved
+                self.buddy.speak("The simulated arm had a software problem, so nothing was moved.")
+            else:
+                self.buddy.speak("The arm failed while moving. Please check the e-stop.")
             self.db.record_transition(
                 medicine_id,
                 DoseState.FAILED,
@@ -155,16 +158,31 @@ class DoseStateMachine:
         return DoseState.MISSED
 
     def finish_adherence(self, medicine_id: int, *, taken: bool) -> DoseState:
-        """Complete a dose that stopped after Placed (conversation owns the ask)."""
+        """Close a dose: after the arm placed it (Placed), or when the person simply reports
+        that they took / missed it with no dispense (no arm connected, or they took it themselves)."""
         medicine = self.db.get_medicine(medicine_id)
         if medicine is None:
             raise ValueError(f"Unknown medicine_id={medicine_id}")
 
         current = self.db.latest_dose_state(medicine_id)
-        if current != DoseState.PLACED:
-            raise ValueError(
-                f"Adherence requires state Placed, found {current}"
+        final_state = DoseState.TAKEN if taken else DoseState.MISSED
+        how = "taken" if taken else "missed"
+
+        if current in (None, *TERMINAL_STATES):
+            # No open dose: record one on the fly, then the person's report.
+            self.db.record_transition(
+                medicine_id, DoseState.DUE, detail="person reported without a reminder",
+                from_state=DoseState.IDLE,
             )
+            current = DoseState.DUE
+        if current in (DoseState.DUE, DoseState.REMINDED):
+            self.db.record_transition(
+                medicine_id, final_state, detail=f"voice: person reported {how} (no dispense)"
+            )
+            self.buddy.speak("Thank you. Dose marked as taken." if taken else "I logged this dose as missed.")
+            return final_state
+        if current != DoseState.PLACED:
+            raise ValueError(f"A dose is in progress ({current.value}); finish or cancel it first.")
 
         # Find last slot from events
         slot_id = None

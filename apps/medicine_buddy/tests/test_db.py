@@ -136,7 +136,7 @@ def test_illegal_transition_is_not_stored(db: Database) -> None:
     asp = db.add_medicine("Aspirin")
     db.record_transition(asp.id, DoseState.DUE)
     with pytest.raises(ValueError):
-        db.record_transition(asp.id, DoseState.TAKEN)
+        db.record_transition(asp.id, DoseState.PICKING)
     assert [e.state for e in db.list_dose_events(asp.id)] == [DoseState.DUE]
 
 
@@ -178,3 +178,17 @@ def test_concurrent_writes_and_reads_from_threads(db: Database) -> None:
         t.join()
     assert errors == []
     assert len(db.list_active_schedules()) == 8 * 20
+
+
+def test_count_rows_and_event_limit(db: Database) -> None:
+    from medicine_buddy.states import DoseState
+    asp = db.add_medicine("Aspirin")
+    db.add_schedule(asp.id, "*", "09:00")
+    for st in (DoseState.DUE, DoseState.REMINDED, DoseState.CONFIRMED):
+        db.record_transition(asp.id, st)
+    assert db.count_rows("medicines") == 1 and db.count_rows("dose_events") == 3
+    assert db.count_rows("schedules", "active = 1") == 1
+    assert [e.state for e in db.list_dose_events(limit=2)] == [DoseState.REMINDED, DoseState.CONFIRMED]   # newest 2, oldest first
+    assert len(db.list_dose_events(asp.id)) == 3
+    with pytest.raises(ValueError):
+        db.count_rows("people; DROP TABLE medicines")

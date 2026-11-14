@@ -26,6 +26,7 @@ import os
 import sys
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 CONVERSATION_DIR = PACKAGE_DIR / "conversation"
@@ -73,6 +74,8 @@ from reachy_mini_conversation_app.conversation_handler import ConversationHandle
 from medicine_buddy.api import MedicineBuddyService, start_server  # noqa: E402
 from medicine_buddy.config import AppConfig  # noqa: E402
 from medicine_buddy.db import default_db_path  # noqa: E402
+from medicine_buddy.reminders import ReminderLoop  # noqa: E402
+from medicine_buddy.speaker import make_rpc_speaker  # noqa: E402
 from medicine_buddy.web_ui import attach_web_ui  # noqa: E402
 
 _SERVICE: MedicineBuddyService | None = None
@@ -129,6 +132,12 @@ class MedicineBuddy(ReachyMiniApp):
         service, server, _ = start_server(host, port, db_path, AppConfig(dry_run=True), voice_guard=guard)
         _SERVICE = service
         _install_transcript_hook()
+        reminders = None
+        if os.environ.get("MEDICINE_BUDDY_REMINDERS", "1").lower() not in {"0", "false", "no", "off"}:
+            ui_port = urlparse(self.custom_app_url).port or 7860
+            reminders = ReminderLoop(service, make_rpc_speaker(f"ws://127.0.0.1:{ui_port}/rpc"))
+            service.reminder_loop = reminders   # shown on the debug page
+            reminders.start()
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
         logger.info("In-app pages (sign in with the caregiver passphrase): http://<this-machine>:7860/medicine")
         logger.info("Database: %s  |  voice guard: %s  |  profile: %s (locked)", db_path, guard, PROFILE)
@@ -136,6 +145,8 @@ class MedicineBuddy(ReachyMiniApp):
             self._run_conversation(reachy_mini, stop_event)
         finally:
             _SERVICE = None
+            if reminders is not None:
+                reminders.stop()
             server.shutdown()
             server.server_close()
             service.close()

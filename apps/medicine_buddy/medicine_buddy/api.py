@@ -21,6 +21,7 @@ from medicine_buddy.debug import DebugMixin
 from medicine_buddy.family_page import render_family_page
 from medicine_buddy.settings import SettingsMixin
 from medicine_buddy.catalog import MedicineCatalog
+from medicine_buddy.clock import ClockMixin
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database, Medicine, Person, Schedule
 from medicine_buddy.dry_run import FakeAdherence, FakeArm, FakeVision
@@ -48,7 +49,7 @@ def _whose(person: Person | None) -> str:
     return f" for {person.name}" if person else ""
 
 
-class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin):
+class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMixin):
     def __init__(
         self,
         db_path: Path,
@@ -160,7 +161,7 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin):
         return {"medicines": listed, "speak_hint": hint}
 
     def due(self) -> dict[str, Any]:
-        items = find_due_doses(self.db)
+        items = find_due_doses(self.db, tz=self.tz())
         names = self._person_names()
         owner = {m.id: names.get(m.person_id) for m in self.db.list_medicines()}
 
@@ -457,17 +458,29 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin):
             ]
 
         speak_hint = buddy.messages[-1] if buddy.messages else final.value
+        messages = buddy.messages
+        demo = self.config.dry_run
         if final.value == "Placed":
-            speak_hint = (
-                f"Your {medicine.name} is in the bowl. Please take it. "
-                "Then ask if they took it and call mark_dose_taken."
-            )
+            if demo:
+                # Nothing was physically moved: never claim the medicine is in a bowl.
+                speak_hint = (
+                    f"Demo mode: the arm is only simulated, so I could not really bring your "
+                    f"{medicine.name}. Please take it from your own box, then tell me when you took it. "
+                    "After they tell you, call mark_dose_taken."
+                )
+                messages = [speak_hint]
+            else:
+                speak_hint = (
+                    f"Your {medicine.name} is in the bowl. Please take it. "
+                    "Then ask if they took it and call mark_dose_taken."
+                )
 
         return {
             "status": "ok",
             "final_state": final.value,
+            "demo_mode": demo,
             "medicine": {"id": medicine.id, "name": medicine.name},
-            "messages": buddy.messages,
+            "messages": messages,
             "events": events,
             "speak_hint": speak_hint,
         }
@@ -539,8 +552,8 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin):
         person_name = {p.id: p.name for p in people}
         owner = {m.id: person_name.get(m.person_id, "unassigned") for m in meds}
         schedules = self.db.list_active_schedules()
-        due_ids = {d.schedule_id for d in find_due_doses(self.db)}
-        events = self.db.list_dose_events()[-30:][::-1]
+        due_ids = {d.schedule_id for d in find_due_doses(self.db, tz=self.tz())}
+        events = self.db.list_dose_events(limit=30)[::-1]
 
         rows = "".join(
             f"<tr{' class=due' if s.id in due_ids else ''}><td>{esc(owner.get(s.medicine_id, '?'))}</td>"
@@ -578,7 +591,8 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin):
         ) or "<tr><td colspan=4 class=muted>No doses yet.</td></tr>"
 
         chips = "".join(f"<span class=chip>{esc(n)}</span>" for n in self.catalog.names)
-        mode = "dry-run (simulated arm)" if self.config.dry_run else "hardware"
+        mode = ("DEMO MODE - the arm is simulated, nothing is really dispensed"
+                if self.config.dry_run else "hardware")
 
         sec = self.guard.status()
         if sec["enabled"]:
@@ -695,12 +709,17 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/settings/suggest": service.settings_suggest,
         "/settings/register": service.settings_register,
         "/settings/passphrase": service.settings_change_passphrase,
+        "/settings/timezone": service.settings_timezone,
     }
     loopback = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
-            print(f"[api] {self.address_string()} - {format % args}")
+            line = f"[api] {self.address_string()} - {format % args}"
+            try:
+                print(line)
+            except UnicodeEncodeError:  # never let a console encoding problem break a request
+                print(line.encode("ascii", "replace").decode("ascii"))
 
         def _own_hosts(self) -> set[str]:
             port = self.server.server_address[1]

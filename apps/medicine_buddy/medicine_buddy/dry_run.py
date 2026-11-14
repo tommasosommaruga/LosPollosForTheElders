@@ -9,12 +9,21 @@ from medicine_buddy.config import AppConfig
 from medicine_buddy.ports import AdherenceResult, OcrMatch, PlaceVerifyResult
 
 
+def _out(message: str) -> None:
+    """print() that cannot raise UnicodeEncodeError (a crash here used to be reported as an arm fault)."""
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(message.encode(encoding, "replace").decode(encoding))
+
+
 class ConsoleBuddy:
     def __init__(self, input_stream: TextIO | None = None) -> None:
         self._in = input_stream or sys.stdin
 
     def speak(self, message: str) -> None:
-        print(f"[Reachy] {message}")
+        _out(f"[Reachy] {message}")
 
     def ask_yes_no(self, prompt: str) -> bool:
         self.speak(prompt)
@@ -27,7 +36,7 @@ class ConsoleBuddy:
                 return True
             if answer in {"n", "no"}:
                 return False
-            print("Please answer yes or no.")
+            _out("Please answer yes or no.")
 
 
 class FakeVision:
@@ -62,7 +71,7 @@ class FakeArm:
         self.fail_place_verify = False
 
     def replay_slot_to_bowl(self, slot_id: int) -> None:
-        print(f"[Arm] Replaying taught waypoints: slot {slot_id} → bowl")
+        _out(f"[Arm] Replaying taught waypoints: slot {slot_id} -> bowl")
         self.replayed.append(slot_id)
         self.bowl_occupied = True
 
@@ -84,7 +93,7 @@ class FakeAdherence:
         self.auto_taken = auto_taken
 
     def watch_or_ask(self, medicine_name: str, timeout_seconds: float) -> AdherenceResult:
-        print(
+        _out(
             f"[Adherence] Watching Reachy camera for {timeout_seconds:.0f}s "
             f"({medicine_name})..."
         )
@@ -98,7 +107,7 @@ class FakeAdherence:
             )
 
         # Simulate timeout then voice fallback
-        print("[Adherence] Camera inconclusive — voice fallback")
+        _out("[Adherence] Camera inconclusive - voice fallback")
         answered = self._buddy.ask_yes_no("Did you take it?")
         if answered:
             return AdherenceResult(taken=True, via="voice", detail="user confirmed")

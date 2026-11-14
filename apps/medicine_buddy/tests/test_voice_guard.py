@@ -185,3 +185,65 @@ def test_no_ai_tool_can_reach_the_voice_endpoint() -> None:
         # every tool calls a fixed path literal, never one built from model arguments
         for call in re.findall(r"_api_request\(\s*\"(?:GET|POST)\",\s*([^,)]+)", src):
             assert call.strip().startswith('"/'), call
+
+
+# ---------------------------------------------------------------- hashing is lazy (the robot's CPU is small)
+
+def _counting_guard(identified: dict[str, set[int]] | None = None):
+    from medicine_buddy.catalog import MedicineCatalog
+    from medicine_buddy.voice_guard import VoiceGuard
+    calls: list[str] = []
+    table = identified or {}
+
+    def identify(text: str) -> set[int]:
+        calls.append(text)
+        return table.get(text, set())
+
+    cat = MedicineCatalog({"Aspirin": []})
+    clock = Clock()
+    g = VoiceGuard(cat, enabled=True, clock=clock, grace=0.0, identify=identify)
+    return g, calls, clock
+
+
+def test_ordinary_chat_is_never_hashed() -> None:
+    g, calls, _ = _counting_guard()
+    for i in range(30):
+        g.heard(f"what is the weather like today number {i}")
+    assert calls == []                                   # nothing hashed while people just talk
+
+
+def test_checks_newest_first_and_stops_early_and_only_once() -> None:
+    g, calls, _ = _counting_guard({"my passphrase is open sesame now": {7}})
+    for i in range(20):
+        g.heard(f"chat {i}")
+    g.heard("my passphrase is open sesame now")
+    g.heard("thanks")
+    assert g.wait_authenticated(lambda ids: 7 in ids) is True
+    assert calls == ["thanks", "my passphrase is open sesame now"]    # 2 sentences, not 22
+    assert g.wait_authenticated(lambda ids: 7 in ids) is True
+    assert len(calls) == 2                                              # remembered: no second hashing
+
+
+def test_reidentify_forgets_old_results() -> None:
+    g, calls, _ = _counting_guard({"alpha beta gamma": {1}})
+    g.heard("alpha beta gamma")
+    assert g.authenticated() == {1}
+    g.identify = lambda text: set()          # the passphrase was changed: the old words no longer match
+    g.reidentify()
+    assert g.authenticated() == set()
+
+
+def test_old_speech_outside_the_window_is_not_hashed() -> None:
+    from medicine_buddy.voice_guard import AUTH_WINDOW
+    g, calls, clock = _counting_guard({"alpha beta gamma": {1}})
+    g.heard("alpha beta gamma")
+    clock.t += AUTH_WINDOW + 5
+    assert g.authenticated() == set() and calls == []
+
+
+def test_unlock_status_never_triggers_hashing() -> None:
+    g, calls, _ = _counting_guard({"alpha beta gamma": {1}})
+    g.heard("alpha beta gamma")
+    assert g.unlock_status() == {} and calls == []        # the debug page polls this every 3 seconds
+    g.authenticated()
+    assert 1 in g.unlock_status()

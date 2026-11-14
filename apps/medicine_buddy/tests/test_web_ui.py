@@ -115,6 +115,7 @@ def test_other_websites_refused(svc, client: TestClient) -> None:
 def test_debug_switch_and_snapshot(svc, client: TestClient) -> None:
     _family(svc)
     svc.voice_heard({"text": f"my passphrase is {MARIO}"})          # spoken passphrase: must never be shown
+    svc.guard.authenticated()      # sentences are checked when something needs a passphrase; do that now
     _login(client)
     token = _token(client, "/medicine/debug")
     assert svc.debug_enabled is False

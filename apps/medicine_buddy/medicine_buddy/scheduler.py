@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 
 from medicine_buddy.db import Database, Schedule
 from medicine_buddy.states import DoseState
@@ -31,6 +31,11 @@ def _weekday_matches(schedule: Schedule, when: datetime) -> bool:
     return when.weekday() in allowed
 
 
+def dose_handled(db: Database, medicine_id: int, since: datetime) -> bool:
+    """True if this medicine was taken or skipped since `since` (aware datetime)."""
+    return _already_handled(db, medicine_id, since)
+
+
 def _already_handled(db: Database, medicine_id: int, since: datetime) -> bool:
     """True if this medicine was taken or skipped since `since` (aware datetime)."""
     for event in reversed(db.list_dose_events(medicine_id)):
@@ -42,10 +47,19 @@ def _already_handled(db: Database, medicine_id: int, since: datetime) -> bool:
     return False
 
 
-def find_due_doses(db: Database, when: datetime | None = None) -> list[DueDose]:
+def _as_now(when: datetime | None, tz: tzinfo | None) -> datetime:
+    """An aware 'now' in the family's time zone (tz=None: the machine's own zone)."""
+    if when is None:
+        return datetime.now(tz) if tz else datetime.now().astimezone()
+    if when.tzinfo is None:  # naive: wall-clock time in the family's zone
+        return when.replace(tzinfo=tz) if tz else when.astimezone()
+    return when.astimezone(tz) if tz else when
+
+
+def find_due_doses(db: Database, when: datetime | None = None, tz: tzinfo | None = None) -> list[DueDose]:
     """Active schedules whose time is within [-DUE_BEFORE, +DUE_AFTER] of `when` today,
-    skipping doses already taken/skipped in that window."""
-    now = (when or datetime.now()).astimezone()  # naive -> local time
+    skipping doses already taken/skipped in that window. `tz`: the family's time zone."""
+    now = _as_now(when, tz)
     due: list[DueDose] = []
     for schedule in db.list_active_schedules():
         hour, minute = (int(x) for x in schedule.time_hhmm.split(":"))

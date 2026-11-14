@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 keywords = ["reachy-mini-app"]
 dependencies = [
     "reachy-mini>=1.11.0",
+    "tzdata",  # IANA time zone names on Windows (zoneinfo)
     # Pollen's conversation app (speech in/out + tool calling), pinned to a release tag
     "reachy_mini_conversation_app @ git+https://github.com/pollen-robotics/reachy_mini_conversation_app@v1.2.0",
 ]

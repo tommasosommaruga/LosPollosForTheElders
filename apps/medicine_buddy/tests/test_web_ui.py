@@ -11,12 +11,13 @@ import pytest
 
 fastapi = pytest.importorskip("fastapi")
 from fastapi import FastAPI  # noqa: E402
+from fastapi.responses import HTMLResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from medicine_buddy.api import MedicineBuddyService  # noqa: E402
 from medicine_buddy.catalog import MedicineCatalog  # noqa: E402
 from medicine_buddy.config import AppConfig  # noqa: E402
-from medicine_buddy.web_ui import MAX_FAILURES, attach_web_ui  # noqa: E402
+from medicine_buddy.web_ui import MAX_FAILURES, attach_web_ui, inject_dashboard_link  # noqa: E402
 
 CARE = "purple mountain sunrise"
 MARIO = "old fishing boat"
@@ -172,7 +173,7 @@ def test_conversation_page_shows_text_and_hides_passphrases(svc, client: TestCli
     svc.record_transcript("assistant", "You take Aspirin at nine.")
     svc.record_transcript("user", f"my passphrase is {MARIO}")
     page = client.get("/medicine/conversation")
-    assert page.status_code == 200 and "Conversation" in page.text
+    assert page.status_code == 200 and "Live talk log" in page.text
     texts = []
     for _ in range(3):                       # unchecked lines show "..." until checked (few per request)
         d = client.get("/medicine/conversation/data").json()
@@ -198,3 +199,29 @@ def test_database_page_read_only_no_secrets(svc, client: TestClient) -> None:
     assert "pass_hash" not in blob and "pass_salt" not in blob and CARE not in blob and MARIO not in blob
     sched = next(t for t in d["tables"] if t["name"] == "schedules")["rows"]
     assert any(r[1] == "Mario" and r[2] == "Aspirin" for r in sched)
+
+
+def test_nav_dashboard_link_on_conversation_and_pollen_home(svc, client: TestClient) -> None:
+    """From live talk log and from Pollen's / Conversation UI, Dashboard must be one click away."""
+    _family(svc)
+    talk = client.get("/medicine/conversation").text
+    assert 'href="/medicine"' in talk
+    assert "← Dashboard" in talk
+    assert 'class="mb-nav"' in talk
+
+    pollen = (
+        '<!doctype html><html><body><header class="app-shell__header">'
+        '<div class="app-shell__lead"><span class="app-shell__brand-text">Reachy Mini</span></div>'
+        "</header></body></html>"
+    )
+    patched = inject_dashboard_link(pollen)
+    assert 'id="mb-dashboard-link"' in patched
+    assert 'href="/medicine"' in patched
+    assert inject_dashboard_link(patched) == patched  # idempotent
+
+    @client.app.get("/")
+    def pollen_home():
+        return HTMLResponse(pollen)
+
+    home = client.get("/").text
+    assert "mb-dashboard-link" in home and 'href="/medicine"' in home

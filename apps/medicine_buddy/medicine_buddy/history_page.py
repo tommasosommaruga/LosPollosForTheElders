@@ -24,7 +24,8 @@ def render_history_page(csrf: str, nav: str, *, base_css: str, prefix: str = "/m
 a.rowlink{{color:inherit;text-decoration:none}} a.rowlink:hover{{color:var(--accent)}}
 .live{{font-size:12px;color:var(--muted)}}
 </style></head><body><main>
-<h1>History</h1>{nav}
+{nav}
+<h1>History</h1>
 <p class=muted>Browse agent activity, search people and stories, and review adherence — all from live data.</p>
 <div id=banner class="banner" role="status" aria-live="polite"></div>
 <div class=tabs role=tablist>
@@ -339,7 +340,7 @@ def render_person_page(
         return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>Person</title>
 <style>{base_css}</style></head><body><main>
-<h1>Person</h1>{nav}<section><p class=bad>{_esc(msg)}</p>
+{nav}<h1>Person</h1><section><p class=bad>{_esc(msg)}</p>
 <p><a href="{prefix}/history">Back to History</a></p></section></main></body></html>"""
     person = dossier["person"]
     name = _esc(person["name"])
@@ -368,7 +369,7 @@ def render_person_page(
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
 <title>{name} - Medicine Buddy</title><style>{base_css}</style></head><body><main>
-<h1>{name}</h1>{nav}
+{nav}<h1>{name}</h1>
 <p class=muted>Role: {role} · medicines {counts.get("medicines", 0)} · stories {counts.get("memories", 0)} ·
 doses {counts.get("dose_events", 0)} · activity {counts.get("activity", 0)}</p>
 <section><h2>Stories &amp; memories</h2>
@@ -396,7 +397,7 @@ def render_record_page(
         return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>Record</title>
 <style>{base_css}</style></head><body><main>
-<h1>Record</h1>{nav}<section><p class=bad>{_esc(record["error"])}</p>
+{nav}<h1>Record</h1><section><p class=bad>{_esc(record["error"])}</p>
 <p><a href="{prefix}/history">Back to History</a></p></section></main></body></html>"""
 
     title = _esc(str(record.get("title") or record.get("name") or f"{kind} #{record.get('id')}"))
@@ -467,7 +468,7 @@ def render_record_page(
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
 <title>{title} - Medicine Buddy</title><style>{base_css}</style></head><body><main>
-<h1>Record</h1>{nav}
+{nav}<h1>Record</h1>
 {''.join(body_bits)}
 <p><a href="{prefix}/history">Back to History</a></p>
 </main></body></html>"""

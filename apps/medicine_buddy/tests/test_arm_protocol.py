@@ -233,3 +233,31 @@ def test_api_move_object_needs_confirm_then_demo_ok(tmp_path: Path) -> None:
     assert done["demo_mode"] is True
     assert done["ok"] is True
     assert "speak_hint" in done
+
+
+def test_api_move_object_unreachable_arm_gives_feedback(tmp_path: Path) -> None:
+    """Configured but dead ARM_URL must not hang — speak feedback and continue."""
+    cat = MedicineCatalog({"Aspirin": []})
+    svc = MedicineBuddyService(
+        tmp_path / "dead.db",
+        AppConfig(dry_run=False, arm_url="http://127.0.0.1:1", arm_timeout_seconds=90.0),
+        cat,
+        VoiceGuard(cat, enabled=False),
+    )
+    ask = svc.move_object({"object_label": "green bottle", "confirmed": False})
+    assert ask["status"] == "needs_confirm"
+
+    done = svc.move_object({
+        "object_label": "green bottle",
+        "destination": "bowl",
+        "confirmed": True,
+    })
+    assert done["status"] == "arm_unreachable"
+    assert done["ok"] is False
+    assert "can't reach the arm" in done["speak_hint"].lower()
+    assert "green bottle" in done["speak_hint"]
+
+
+def test_probe_reachable_false_for_closed_port() -> None:
+    arm = HttpArmClient("http://127.0.0.1:1", timeout_s=5.0)
+    assert arm.probe_reachable(timeout_s=0.3) is False

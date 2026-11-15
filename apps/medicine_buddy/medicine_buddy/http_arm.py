@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+import socket
 import urllib.error
 import urllib.request
 from typing import Any
 from urllib.parse import urljoin, urlparse
+
+# Fail-fast before a long POST when the arm PC is offline / wrong network.
+PROBE_TIMEOUT_S = 2.0
 
 from medicine_buddy.arm_protocol import (
     CHECK_TAKEN_PATH,
@@ -75,6 +79,24 @@ class HttpArmClient:
             dry_run=config.dry_run,
             ocr_min_confidence=config.ocr_min_confidence,
         )
+
+    def probe_reachable(self, timeout_s: float = PROBE_TIMEOUT_S) -> bool:
+        """True if TCP connect to the arm host:port succeeds quickly.
+
+        Used so voice tools can keep talking when the arm PC is down, instead of
+        blocking for the full POST timeout (often 60–90s).
+        """
+        parsed = urlparse(self.base_url)
+        host = parsed.hostname
+        if not host:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            with socket.create_connection((host, port), timeout=max(0.2, float(timeout_s))):
+                return True
+        except OSError as exc:
+            logger.warning("arm probe failed %s:%s — %s", host, port, exc)
+            return False
 
     def dispense(
         self,

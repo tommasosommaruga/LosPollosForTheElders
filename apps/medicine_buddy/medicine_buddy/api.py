@@ -545,10 +545,16 @@ class MedicineBuddyService(
             vision = FakeVision(self.config)
             arm: FakeArm | HttpArmClient = FakeArm()
             remote = HttpArmClient.from_config(self.config)
+            arm_unreachable = False
             if remote is not None:
-                arm = remote
-                # Arm does one-shot place + camera check_taken unless conversation wants a pause.
-                # With remote arm, still honour stop_after_placed for TTS handoff after place.
+                if remote.probe_reachable():
+                    arm = remote
+                    # Arm does one-shot place + camera check_taken unless conversation
+                    # wants a pause. With remote arm, still honour stop_after_placed.
+                else:
+                    # Keep talking: unreachable arm must not block the dose path.
+                    arm_unreachable = True
+                    remote = None
             adherence = FakeAdherence(buddy, auto_taken=None)
             machine = DoseStateMachine(
                 self.db, buddy, vision, arm, adherence, self.config
@@ -572,10 +578,17 @@ class MedicineBuddyService(
             ]
 
         messages = buddy.messages
-        demo = self.config.dry_run and remote is None
+        demo = (self.config.dry_run and remote is None) or arm_unreachable
         arm_remote = remote is not None
         if final.value == "Placed":
-            if demo:
+            if arm_unreachable:
+                speak_hint = (
+                    f"I can't reach the arm right now, so please take your {medicine.name} "
+                    "from your own box, then tell me when you took it. "
+                    "After they tell you, call mark_dose_taken."
+                )
+                messages = [speak_hint]
+            elif demo:
                 # Nothing was physically moved: never claim the medicine is in a bowl.
                 speak_hint = (
                     f"Demo mode: the arm is only simulated, so I could not really bring your "
@@ -692,6 +705,20 @@ class MedicineBuddyService(
                 }
 
             remote = HttpArmClient.from_config(self.config)
+            if remote is not None and not remote.probe_reachable():
+                # Fail fast: do not block the conversation on a dead arm PC.
+                return {
+                    "status": "arm_unreachable",
+                    "ok": False,
+                    "object": {"label": label, "kind_hint": kind_hint},
+                    "destination": destination,
+                    "arm_remote": False,
+                    "demo_mode": False,
+                    "speak_hint": (
+                        f"I can't reach the arm right now, so I couldn't bring the {label}. "
+                        f"Please take the {label} yourself for now."
+                    ),
+                }
             try:
                 if remote is not None:
                     result = remote.move_object(
@@ -708,11 +735,14 @@ class MedicineBuddyService(
                     )
             except Exception as exc:  # noqa: BLE001 — speak failure, do not crash conversation
                 return {
-                    "status": "error",
+                    "status": "arm_unreachable",
+                    "ok": False,
                     "error": str(exc)[:300],
+                    "object": {"label": label, "kind_hint": kind_hint},
+                    "destination": destination,
                     "speak_hint": (
-                        f"I couldn't reach the arm for the {label}. "
-                        "Please check the arm computer, or try again in a moment."
+                        f"I can't reach the arm right now, so I couldn't bring the {label}. "
+                        f"Please take the {label} yourself for now."
                     ),
                 }
 

@@ -159,3 +159,25 @@ def test_settings_calendar_roundtrip(service: MedicineBuddyService) -> None:
     assert rotated["export_token"] != first["export_token"]
     saved = service.settings_calendar({"import_url": "https://example.com/cal.ics"})
     assert saved["import_url"] == "https://example.com/cal.ics"
+
+
+def _one(dtstart_line: str) -> str:
+    return f"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:x\r\nSUMMARY:Visit\r\n{dtstart_line}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+
+def test_parse_ics_converts_utc_and_tzid_to_family_zone() -> None:
+    from zoneinfo import ZoneInfo
+    paris = ZoneInfo("Europe/Paris")
+    # Google-style UTC export: 13:30Z in November = 14:30 in Paris (the reported 1 h bug)
+    ev = parse_ics(_one("DTSTART:20261116T133000Z"), tz=paris)[0]
+    assert ev.time_hhmm == "14:30" and ev.starts_at == "2026-11-16T14:30:00"
+    # Summer time: 12:30Z = 14:30 CEST
+    assert parse_ics(_one("DTSTART:20260716T123000Z"), tz=paris)[0].time_hhmm == "14:30"
+    # TZID in the same zone is kept; another zone is converted
+    assert parse_ics(_one("DTSTART;TZID=Europe/Zurich:20261116T143000"), tz=paris)[0].time_hhmm == "14:30"
+    assert parse_ics(_one("DTSTART;TZID=Europe/London:20261116T133000"), tz=paris)[0].time_hhmm == "14:30"
+    # Floating time is local wall-clock time: unchanged
+    assert parse_ics(_one("DTSTART:20261116T143000"), tz=paris)[0].time_hhmm == "14:30"
+    # UTC late evening rolls into the next local day (weekday follows the local date)
+    late = parse_ics(_one("DTSTART:20261115T233000Z"), tz=paris)[0]
+    assert late.starts_at == "2026-11-16T00:30:00" and late.weekdays == "0"

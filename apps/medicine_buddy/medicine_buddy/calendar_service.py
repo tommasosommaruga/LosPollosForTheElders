@@ -232,7 +232,7 @@ class CalendarMixin:
                 self.db.set_setting(LAST_SYNC_ERROR_KEY, msg)
                 logger.info("Calendar import failed: %s", msg)
                 return {"error": f"Could not fetch calendar: {msg}"}
-        parsed = parse_ics(text)
+        parsed = parse_ics(text, tz=self.tz())
         companion_n = proposal_n = skipped = 0
         for item in parsed:
             if item.medicine_hint or self._looks_like_medicine(item.summary):

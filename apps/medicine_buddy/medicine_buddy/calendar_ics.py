@@ -9,8 +9,9 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, tzinfo
 from typing import Iterable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # ICS BYDAY <-> Python weekday (Mon=0)
 _BYDAY = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
@@ -176,23 +177,44 @@ def _parse_props(block: str) -> dict[str, str]:
     return props
 
 
-def _parse_dtstart(props: dict[str, str]) -> tuple[str | None, str | None, bool]:
-    """Return (time_hhmm, starts_at_iso, all_day)."""
-    raw = props.get("DTSTART", "")
+def _source_zone(raw: str, params: str) -> tzinfo | None:
+    """Zone a DTSTART is written in: UTC for a trailing Z, TZID=... if given, None if floating."""
+    if raw.upper().endswith("Z"):
+        return timezone.utc
+    m = re.search(r"TZID=\"?([^;:\"]+)\"?", params, re.IGNORECASE)
+    if m:
+        try:
+            return ZoneInfo(m.group(1).strip())
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            return None  # unknown (e.g. Windows-style) zone name: keep the wall-clock time as written
+    return None
+
+
+def _parse_dtstart(props: dict[str, str], tz: tzinfo | None = None) -> tuple[str | None, str | None, bool]:
+    """Return (time_hhmm, starts_at_iso, all_day), timed values in the family zone `tz`.
+
+    UTC (``...Z``) and ``TZID=`` start times are converted to `tz` (or to the machine's zone when
+    tz is None); floating times are already local wall-clock time and are kept as written."""
+    raw = props.get("DTSTART", "").strip()
     params = props.get("_DTSTART_PARAMS", "")
     if "VALUE=DATE" in params.upper() or (len(raw) == 8 and raw.isdigit()):
         day = f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]}"
         return None, day, True
-    # 20261115T090000 or with Z
+    # 20261115T090000, 20261115T090000Z or DTSTART;TZID=Europe/Paris:20261115T090000
     m = re.match(r"^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})", raw)
     if not m:
         return None, None, False
-    starts = f"{m.group(1)}-{m.group(2)}-{m.group(3)}T{m.group(4)}:{m.group(5)}:{m.group(6)}"
-    return f"{m.group(4)}:{m.group(5)}", starts, False
+    when = datetime(*(int(g) for g in m.groups()))
+    source = _source_zone(raw, params)
+    if source is not None:
+        aware = when.replace(tzinfo=source)
+        when = (aware.astimezone(tz) if tz else aware.astimezone()).replace(tzinfo=None)
+    return when.strftime("%H:%M"), when.strftime("%Y-%m-%dT%H:%M:%S"), False
 
 
-def parse_ics(text: str) -> list[ParsedEvent]:
-    """Parse VEVENTs from an ICS document. Tolerant of missing fields."""
+def parse_ics(text: str, tz: tzinfo | None = None) -> list[ParsedEvent]:
+    """Parse VEVENTs from an ICS document. Tolerant of missing fields.
+    `tz`: the family's time zone; UTC / TZID event times are converted into it."""
     unfolded = _unfold(text or "")
     events: list[ParsedEvent] = []
     for match in re.finditer(r"BEGIN:VEVENT(.*?)END:VEVENT", unfolded, re.DOTALL | re.IGNORECASE):
@@ -200,7 +222,7 @@ def parse_ics(text: str) -> list[ParsedEvent]:
         summary = _unescape_text(props.get("SUMMARY", "")).strip()
         description = _unescape_text(props.get("DESCRIPTION", "")).strip()
         uid = (props.get("UID") or new_uid("import")).strip()
-        time_hhmm, starts_at, all_day = _parse_dtstart(props)
+        time_hhmm, starts_at, all_day = _parse_dtstart(props, tz)
         weekdays: str | None = None
         rrule = props.get("RRULE", "")
         if "BYDAY=" in rrule.upper():

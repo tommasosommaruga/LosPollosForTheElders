@@ -79,6 +79,7 @@ from medicine_buddy.checkins import CheckInLoop  # noqa: E402
 from medicine_buddy.reminders import ReminderLoop  # noqa: E402
 from medicine_buddy.speaker import RpcSpeaker  # noqa: E402
 from medicine_buddy.wake import start_wake_greeting  # noqa: E402
+from medicine_buddy.wake_robot import make_waker  # noqa: E402
 from medicine_buddy.web_ui import attach_web_ui  # noqa: E402
 
 _SERVICE: MedicineBuddyService | None = None
@@ -157,7 +158,10 @@ class MedicineBuddy(ReachyMiniApp):
             ui_port = urlparse(self.custom_app_url).port or 7860
             speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")   # waits until Reachy is idle
             speaker.start()
-            reminders = ReminderLoop(service, speaker)
+            waker = None
+            if os.environ.get("MEDICINE_BUDDY_WAKE_ROBOT", "1").lower() not in {"0", "false", "no", "off"}:
+                waker = make_waker(reachy_mini)   # wake from the sleep pose when a dose is due
+            reminders = ReminderLoop(service, speaker, wake=waker)
             service.reminder_loop = reminders   # shown on the debug page
             reminders.start()
         if os.environ.get("MEDICINE_BUDDY_CHECKINS", "1").lower() not in {"0", "false", "no", "off"}:

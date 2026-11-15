@@ -27,7 +27,13 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-SCOPE = "https://www.googleapis.com/auth/calendar.events"
+# events create/cancel + calendar metadata / list (Test Google uses events.list).
+SCOPE = " ".join(
+    [
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.readonly",
+    ]
+)
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REDIRECT_URI = "http://127.0.0.1:8765/"

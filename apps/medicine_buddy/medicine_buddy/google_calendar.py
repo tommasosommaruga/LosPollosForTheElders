@@ -148,18 +148,24 @@ def delete_google_event(cfg: GoogleCalConfig, event_id: str) -> None:
 
 
 def probe_google_calendar(cfg: GoogleCalConfig) -> dict[str, Any]:
-    """Lightweight connectivity check (calendar.get)."""
+    """Lightweight connectivity check via events.list (matches calendar.events scope).
+
+    ``calendars.get`` needs broader ``calendar`` scope and 403s with events-only tokens.
+    """
     if not cfg.configured:
         return {"ok": False, "error": "not configured", **google_write_status(cfg)}
     try:
         token = _access_token(cfg)
-        url = f"{CAL_API}/calendars/{urllib.parse.quote(cfg.calendar_id, safe='')}"
+        cal = urllib.parse.quote(cfg.calendar_id, safe="")
+        # events.list is allowed with auth/calendar.events (our OAuth scope).
+        url = f"{CAL_API}/calendars/{cal}/events?maxResults=1&singleEvents=true"
         meta = _http_json("GET", url, None, token=token)
         return {
             "ok": True,
-            "summary": meta.get("summary") or "",
+            "summary": cfg.calendar_id,
             "calendar_id": cfg.calendar_id,
-            "time_zone": meta.get("timeZone") or "",
+            "events_seen": len(meta.get("items") or []),
+            "time_zone": "",
         }
     except Exception as exc:  # noqa: BLE001
         logger.info("Google Calendar probe failed: %s", exc)

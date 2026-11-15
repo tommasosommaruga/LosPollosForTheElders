@@ -63,15 +63,6 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Profile: freer emotions (`play_emotion`, `dance`, `move_head`, `sweep_look`, …); package version bumped (health uses `__version__`)
 - Tests: `test_listen_mode.py`, passphrase master-switch coverage in `test_family_settings.py`
 
-## v0.8.6 — disable concurrent sleep-wake by default (done)
-
-- `MEDICINE_BUDDY_WAKE_ROBOT` defaults to **off**: reminder-thread `wake_up`/`enable_motors` raced the conversation daemon WebSocket (`ConnectionError: Lost connection with the server` → exit 1)
-
-## v0.8.4 — back to dashboard from Reachy conversation (done)
-
-- Pollen `/` Conversation UI gets a permanent **← Medicine Buddy** link (was easy to get stuck with no way back)
-- Sticky `← Dashboard` nav on all `/medicine` pages; live talk log renamed so it is not confused with Reachy conversation
-
 ## v0.8.3 — arm HTTP JSON protocol (done)
 
 - After voice confirm, Buddy POSTs structured `medicine_buddy.arm.v1` JSON to `MEDICINE_BUDDY_ARM_URL`

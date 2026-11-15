@@ -650,8 +650,8 @@ class MedicineBuddyService(
     def status_page(self, nav: str | None = None) -> str:
         """The dashboard. `nav` replaces the default header link (used by the in-app UI)."""
         if nav is None:
-            nav = ('<div style="font-size:14px;font-weight:500;margin:0 0 10px">'
-                   '<a href="/family" style="color:var(--accent)">Family settings &rarr;</a></div>')
+            nav = ('<a href="/family" style="font-size:14px;font-weight:500;margin-left:10px;'
+                   'color:var(--accent)">Family settings &rarr;</a>')
         esc = html.escape
         meds = self.db.list_medicines()
         names = {m.id: m.name for m in meds}
@@ -743,13 +743,8 @@ tr.due td{{background:var(--due)}} .muted{{color:var(--muted)}}
 .ok{{color:var(--accent)}} .warn{{color:#c0392b}} code{{font-size:13px}}
 summary{{cursor:pointer}} .memtext{{white-space:pre-wrap;margin-top:6px;color:var(--fg)}}
 a{{color:var(--accent)}}
-.mb-nav{{position:sticky;top:0;z-index:20;background:var(--bg);padding:8px 0 10px;margin:0 0 14px;
-  border-bottom:1px solid var(--line);font-size:14px;font-weight:500;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}}
-.mb-nav a{{color:var(--accent);text-decoration:none}} .mb-nav a.mb-nav-active{{font-weight:700;text-decoration:underline}}
-.mb-nav-who{{color:var(--muted);margin-left:auto}}
 </style></head><body><main>
-{nav}
-<h1>Medicine Buddy</h1>
+<h1>Medicine Buddy {nav}</h1>
 <div class=sub>Mode: {mode} &middot; updated {now} &middot; refreshes every 15 s</div>
 <section><h2>People</h2><table><tr><th>Name</th><th>Role</th><th>Medicines</th><th>Memories</th></tr>{people}</table></section>
 <section><h2>Schedules</h2><table><tr><th>Person</th><th>Medicine</th><th>Time</th><th>Days</th><th></th><th></th></tr>{rows}</table></section>

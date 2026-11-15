@@ -222,7 +222,6 @@ reachy-mini-app-assistant check apps/medicine_buddy      # validate the app pack
   It repeats every 10 minutes, up to 3 times. It waits until Reachy is idle: never while someone is talking to it, while Reachy is thinking or speaking, or while a tool call (e.g. a web search) is still running. If nobody answers
   within an hour the dose is recorded as **Missed** (visible on the dashboard). Switch off with
   `MEDICINE_BUDDY_REMINDERS=0`.
-- **Wakes up by itself (opt-in)** — off by default. Set `MEDICINE_BUDDY_WAKE_ROBOT=1` to run the SDK wake-up before a due reminder when Reachy is in the sleep pose. Left off because concurrent motor commands from the reminder thread can drop the daemon WebSocket and crash the app.
 - **Wake greeting** — when the app starts, Reachy says a short hello and which medicines are due in the next 30 minutes (real schedules). Turn off with `MEDICINE_BUDDY_WAKE_GREETING=0`.
 - **Set the time zone once** on the Family settings page ("Clock & time zone", one click for your device's zone)
   or with `MEDICINE_BUDDY_TZ=Europe/Zurich`. The robot's own clock is usually UTC, so without this a 9 AM

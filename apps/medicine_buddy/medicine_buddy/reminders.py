@@ -73,7 +73,6 @@ class ReminderLoop:
         repeat_after: float = REPEAT_AFTER_S,
         max_reminders: int = MAX_REMINDERS,
         quiet_after_speech: float = QUIET_AFTER_SPEECH_S,
-        wake: Callable[[], bool] | None = None,
     ) -> None:
         self.service = service
         self.speak = speak
@@ -81,8 +80,6 @@ class ReminderLoop:
         self.repeat_after = timedelta(seconds=repeat_after)
         self.max_reminders = max_reminders
         self.quiet_after_speech = quiet_after_speech
-        self.wake = wake                      # wakes the robot from its sleep pose before it speaks
-        self.last_woke: datetime | None = None
         self._state: dict[tuple[int, str], _Entry] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -115,13 +112,6 @@ class ReminderLoop:
             person = db.get_person(medicine.person_id) if medicine and medicine.person_id else None
             prompt = build_prompt(person.name if person else None, d.medicine_name, d.time_hhmm,
                                   count, self.max_reminders)
-            if self.wake is not None:
-                try:
-                    if self.wake():
-                        self.last_woke = now
-                        logger.info("Woke Reachy up for the %s reminder", d.medicine_name)
-                except Exception:  # noqa: BLE001 - waking is best effort
-                    logger.exception("Wake-up before reminder failed")
             try:
                 delivered = bool(self.speak(prompt))
             except Exception as exc:  # noqa: BLE001 - a broken speaker must never kill the loop
@@ -233,6 +223,5 @@ class ReminderLoop:
             ],
             "last_spoken": self.last_spoken.strftime("%H:%M:%S") if self.last_spoken else None,
             "last_error": self.last_error,
-            "last_woke": self.last_woke.strftime("%H:%M:%S") if self.last_woke else None,
             "conversation": self.speak.status() if hasattr(self.speak, "status") else None,
         }

@@ -64,10 +64,6 @@ input,select{font:inherit;width:100%;padding:11px 12px;border-radius:10px;border
 .msg.ok{display:block;background:var(--soft);color:var(--accent);font-weight:600}
 .msg.err{display:block;background:transparent;border:1px solid var(--warn);color:var(--warn)}
 [hidden]{display:none!important}
-.mb-nav{position:sticky;top:0;z-index:20;background:var(--bg);padding:8px 0 10px;margin:0 0 14px;
-  border-bottom:1px solid var(--line);font-size:14px;font-weight:500;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
-.mb-nav a{color:var(--accent);text-decoration:none} .mb-nav a.mb-nav-active{font-weight:700;text-decoration:underline}
-.mb-nav-who{color:var(--muted);margin-left:auto}
 </style></head><body><main>
 <!--NAV-->
 <h1>Family &amp; passphrases</h1>

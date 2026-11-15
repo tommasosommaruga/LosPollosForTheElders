@@ -12,6 +12,7 @@ The database view never includes passphrase hashes or salts.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -24,6 +25,17 @@ MAX_LINES = 200
 CHECKS_PER_REQUEST = 4
 HIDDEN = "[passphrase hidden]"
 _ROLES = {"user": "person", "assistant": "reachy"}
+# Short confirms / save prompts — not part of the story body.
+_SKIP_UTTERANCE = re.compile(
+    r"^(yes|yeah|yep|yup|sure|ok|okay|please|thanks|thank you|"
+    r"save (it|this|that)|please save.*|finish( here)?( the story)?.*|"
+    r"store (it|this)|keep (it|this)|that'?s (all|it)|done)$",
+    re.IGNORECASE,
+)
+_META_TAIL = re.compile(
+    r"[\s.,]*((please\s+)?(finish|save|store|keep)\b.{0,100})$",
+    re.IGNORECASE,
+)
 
 
 class TranscriptMixin:
@@ -73,6 +85,38 @@ class TranscriptMixin:
         with self._tlock:
             self._tlines.clear()
         return {"status": "cleared"}
+
+    def recent_user_story_text(
+        self,
+        *,
+        max_chars: int = 6000,
+        max_age_s: float = 900.0,
+        max_lines: int = 40,
+    ) -> str:
+        """Join recent person utterances into one story body (for faithful memory saves).
+
+        Skips tiny confirmations like "yes" / "save it". Strips a trailing
+        "finish… save it" meta-instruction when present. Empty if nothing useful.
+        """
+        now = time.time()
+        with self._tlock:
+            lines = [
+                ln for ln in self._tlines
+                if ln["who"] == "person" and now - ln["at"] <= max_age_s
+            ]
+        chunks: list[str] = []
+        for ln in lines[-max_lines:]:
+            text = (ln.get("text") or "").strip()
+            if not text or text in {HIDDEN, "..."}:
+                continue
+            if _SKIP_UTTERANCE.match(text) or len(text) < 12:
+                continue
+            chunks.append(text)
+        if not chunks:
+            return ""
+        body = " ".join(chunks).strip()
+        body = _META_TAIL.sub("", body).strip()
+        return body[: max(0, int(max_chars))]
 
     # ------------------------------------------------------------ database view
     def database_snapshot(self) -> dict[str, Any]:

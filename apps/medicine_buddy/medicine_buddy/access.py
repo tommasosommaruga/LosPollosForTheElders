@@ -36,6 +36,9 @@ from medicine_buddy.names import name_key, strip_titles
 
 MAX_MEMORY_CHARS = 6000
 MAX_RECALL = 5
+# Model often passes a short paraphrase; prefer recent spoken words when much richer.
+_MIN_SUMMARY_CHARS = 200
+_TRANSCRIPT_RICHER_RATIO = 1.35
 
 
 class PeopleAccessMixin:
@@ -238,6 +241,27 @@ class PeopleAccessMixin:
         return {"people": out, "speak_hint": hint}
 
     # ------------------------------------------------------------ memories
+    def _full_memory_text(self, tool_text: str) -> tuple[str, str]:
+        """Prefer recent spoken words over a short model paraphrase.
+
+        Returns (text_to_store, source) where source is ``transcript`` or ``tool``.
+        """
+        tool = " ".join(str(tool_text or "").split()).strip()
+        spoken = ""
+        if hasattr(self, "recent_user_story_text"):
+            spoken = self.recent_user_story_text(max_chars=MAX_MEMORY_CHARS)
+        if not spoken:
+            return tool, "tool"
+        # Spoken story is clearly richer → keep what they actually said.
+        if len(spoken) >= max(_MIN_SUMMARY_CHARS, int(len(tool) * _TRANSCRIPT_RICHER_RATIO)):
+            return spoken, "transcript"
+        if len(tool) < _MIN_SUMMARY_CHARS and len(spoken) > len(tool):
+            return spoken, "transcript"
+        # Prefer whichever is longer when both look substantial.
+        if len(spoken) > len(tool) and len(tool) < len(spoken) * 0.75:
+            return spoken, "transcript"
+        return tool, "tool"
+
     def save_memory(self, body: dict[str, Any]) -> dict[str, Any]:
         """Store a story / recipe / skill / tradition for a person (their passphrase or the caregiver's)."""
         person, err = self._resolve_person(body.get("person"), allow_default=False, for_change=True)
@@ -246,7 +270,12 @@ class PeopleAccessMixin:
         if person is None:
             return {"error": "register people first",
                     "speak_hint": "To keep memories for someone, the caregiver first needs to register them."}
-        text = str(body.get("text") or "").strip()
+        raw_text = str(body.get("text") or "").strip()
+        if not raw_text and not (
+            hasattr(self, "recent_user_story_text") and self.recent_user_story_text()
+        ):
+            return {"error": "text is required", "speak_hint": "What should I save?"}
+        text, source = self._full_memory_text(raw_text)
         if not text:
             return {"error": "text is required", "speak_hint": "What should I save?"}
         if len(text) > MAX_MEMORY_CHARS:
@@ -262,7 +291,7 @@ class PeopleAccessMixin:
         with self._lock:
             mem = self.db.add_memory(person.id, kind, str(body.get("title") or ""), text)
             stored = self.db.get_memory(mem.id)
-        if stored is None or stored.text != text.strip():
+        if stored is None or stored.text != text:
             return {"error": "memory could not be verified", "speak_hint": "Something went wrong saving that."}
         # Story/memory dictation is done — restore snappy turn-taking.
         if hasattr(self, "set_listen_patient") and self.is_listen_patient():
@@ -270,8 +299,19 @@ class PeopleAccessMixin:
         return {
             "status": "ok",
             "verified": True,
-            "memory": {"id": stored.id, "person": person.name, "kind": stored.kind, "title": stored.title},
-            "speak_hint": f"Saved in {person.name}'s memories: the {stored.kind} \"{stored.title}\".",
+            "source": source,
+            "chars_saved": len(stored.text),
+            "memory": {
+                "id": stored.id,
+                "person": person.name,
+                "kind": stored.kind,
+                "title": stored.title,
+                "text": stored.text,
+            },
+            "speak_hint": (
+                f"Saved in {person.name}'s memories: the {stored.kind} \"{stored.title}\" "
+                f"({len(stored.text)} characters, full detail kept)."
+            ),
         }
 
     def recall_memories(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -302,8 +342,21 @@ class PeopleAccessMixin:
             if sch:
                 meds.append({"name": m.name, "times": [s.time_hhmm for s in sch]})
         if found:
-            what = ", ".join(f"the {m.kind} \"{m.title}\"" for m in found)
-            hint = f"I have {len(mems)} matching memories from {person.name}, for example {what}."
+            first = found[0]
+            if len(found) == 1:
+                hint = (
+                    f"Retell {person.name}'s {first.kind} \"{first.title}\" now as one complete, "
+                    f"engaging spoken story. Use EVERY detail from memories[0].text — jokes, feelings, "
+                    f"names, and asides. Do NOT summarize or shorten. Be warm and vivid, but invent "
+                    f"nothing that is not in that text."
+                )
+            else:
+                titles = ", ".join(f"\"{m.title}\"" for m in found)
+                hint = (
+                    f"I found {len(mems)} memories from {person.name} ({titles}). "
+                    f"Retell the best match in full from its text field — every detail, engaging and "
+                    f"complete. Never summarize; never invent."
+                )
         elif topic or kind:
             hint = f"I couldn't find anything like that in {person.name}'s memories."
         else:
@@ -312,12 +365,22 @@ class PeopleAccessMixin:
             "person": {"name": person.name, "role": person.role},
             "total_matching": len(mems),
             "memories": [
-                {"id": m.id, "kind": m.kind, "title": m.title, "text": m.text, "saved": m.created_at[:10]}
+                {
+                    "id": m.id,
+                    "kind": m.kind,
+                    "title": m.title,
+                    "text": m.text,
+                    "chars": len(m.text),
+                    "saved": m.created_at[:10],
+                }
                 for m in found
             ],
             "medicines": meds,
             "speak_hint": hint,
-            "note": "These were told by the family. Retell them warmly and faithfully; don't invent details.",
+            "note": (
+                "Retell the FULL memory text as an engaging spoken story. Keep every detail. "
+                "Do not summarize. Do not invent. Say whose memory it is."
+            ),
         }
 
     def forget_memory(self, body: dict[str, Any]) -> dict[str, Any]:

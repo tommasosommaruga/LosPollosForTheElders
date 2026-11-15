@@ -208,15 +208,52 @@ def test_save_and_recall_memories(svc: MedicineBuddyService) -> None:
     # Easy mode: any registered passphrase can save for anyone
     r = svc.save_memory({**m, "passphrase": MARIO})
     assert r["verified"] and "Saved in Rosa's memories" in r["speak_hint"]
+    assert r["memory"]["text"] == POLENTA
+    assert r["chars_saved"] == len(POLENTA)
     svc.save_memory({"person": "Mario", "kind": "story", "title": "The winter of 1956",
                      "text": "The lake froze and we walked across it to the next village.", "passphrase": CARE})
 
     # the grandson asks by name, misheard / with a family word in front
     got = svc.recall_memories({"person": "nonna rosa", "topic": "polenta"})
     assert got["person"]["name"] == "Rosa" and got["memories"][0]["text"] == POLENTA
+    assert "EVERY detail" in got["speak_hint"] or "complete" in got["speak_hint"].lower()
     assert svc.recall_memories({"person": "Mario", "kind": "recipe"})["total_matching"] == 0
     assert svc.recall_memories({"person": "Mario"})["memories"][0]["title"] == "The winter of 1956"
     assert "don't know anyone called" in svc.recall_memories({"person": "Giuseppe"})["speak_hint"]
+
+
+def test_save_memory_prefers_full_spoken_transcript_over_short_summary(
+    svc: MedicineBuddyService,
+) -> None:
+    """Model paraphrase must not wipe the long story the person actually said."""
+    _family(svc)
+    full = (
+        "What an amazing hackathon I've been doing. I've been vibe coding for the whole time. "
+        "I really like this, and I really like the vibe, I like joking, I like making code and "
+        "pushing code. It's really nice, and I like to move the arm randomly and do a lot of "
+        "things like that, and also Reachy Mini is my favorite of all time, it's literally the "
+        "beast of this hackathon. Reachy is the companion I always wanted and I love him."
+    )
+    svc.record_transcript("user", full)
+    svc.record_transcript("user", "Finish here the story and save it, please.")
+    short = "He had an amazing time at the hackathon vibe coding with Reachy Mini!"
+    saved = svc.save_memory({
+        "person": "Mario",
+        "kind": "story",
+        "title": "Vibe coding hackathon",
+        "text": short,
+        "passphrase": MARIO,
+    })
+    assert saved["verified"] is True
+    assert saved["source"] == "transcript"
+    assert "vibe coding" in saved["memory"]["text"].lower()
+    assert "beast of this hackathon" in saved["memory"]["text"].lower()
+    assert "love him" in saved["memory"]["text"].lower()
+    assert len(saved["memory"]["text"]) > len(short) * 2
+
+    told = svc.recall_memories({"person": "Mario", "topic": "hackathon"})
+    assert "beast of this hackathon" in told["memories"][0]["text"].lower()
+    assert "summar" in told["speak_hint"].lower() or "EVERY detail" in told["speak_hint"]
 
 
 def test_memory_cannot_contain_a_passphrase(svc: MedicineBuddyService) -> None:

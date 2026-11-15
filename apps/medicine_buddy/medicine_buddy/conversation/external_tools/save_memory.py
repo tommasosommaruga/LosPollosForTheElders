@@ -27,9 +27,11 @@ class SaveMemory(Tool):
     description = (
         "Save something a person wants to pass on to their children and grandchildren: a story, "
         "recipe, skill, tradition, advice or piece of family history. ONLY call this after you asked "
-        "'Would you like me to save this in your memories?' and they said yes. Write `text` as faithfully "
-        "as possible in their own words (for a recipe keep ingredients and steps). Saving needs that "
-        "person's passphrase or the caregiver's, said recently. Never include a passphrase in the text."
+        "'Would you like me to save this in your memories?' and they said yes (or they clearly asked "
+        "you to save it). CRITICAL: put the COMPLETE story in `text` — every sentence, joke, feeling, "
+        "name and aside they said. NEVER summarize, shorten, or paraphrase. For a recipe keep every "
+        "ingredient and step. The server may also keep their recent spoken words if your text is too "
+        "short. Saving may need that person's passphrase. Never include a passphrase in the text."
     )
     parameters_schema = {
         "type": "object",
@@ -38,7 +40,12 @@ class SaveMemory(Tool):
             "kind": {"type": "string",
                      "enum": ["story", "recipe", "skill", "tradition", "advice", "family history", "other"]},
             "title": {"type": "string", "description": "Short title, e.g. 'Nonna's polenta' or 'The winter of 1956'"},
-            "text": {"type": "string", "description": "The full story / recipe / skill in their words"},
+            "text": {
+                "type": "string",
+                "description": (
+                    "FULL verbatim story in their words — not a summary. Include every detail they said."
+                ),
+            },
             "passphrase": {"type": "string", "description": "Their passphrase as they just said it (only needed if the voice guard is off)"},
         },
         "required": ["person", "kind", "title", "text"],

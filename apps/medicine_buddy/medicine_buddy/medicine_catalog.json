@@ -138,7 +138,9 @@
   },
   {
    "name": "Adrenalin",
-   "aliases": []
+   "aliases": [
+    "adrenaline"
+   ]
   },
   {
    "name": "Aesculaforce forte Venen",
@@ -5382,7 +5384,8 @@
   {
    "name": "Noradrenalin",
    "aliases": [
-    "Noradrenaline Aguettant"
+    "Noradrenaline Aguettant",
+    "noradrenaline"
    ]
   },
   {

@@ -25,14 +25,31 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
 class ListUpcomingEvents(Tool):
     name = "list_upcoming_events"
     description = (
-        "List medicines due soon and companion calendar events (appointments, visits, notes). "
-        "Use when they ask what is coming up, what is on the calendar, or what happens today. "
+        "List medicines and companion calendar events (appointments, visits, notes) in a time window. "
+        "Pass when as a relative phrase (today, tomorrow, next week, soon, YYYY-MM-DD). "
+        "Default when=soon covers from now through end of tomorrow. "
         "Always read the returned speak_hint aloud. Never invent events."
     )
-    parameters_schema = {"type": "object", "properties": {}, "required": []}
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "when": {
+                "type": "string",
+                "description": (
+                    "Relative window: soon (default), today, tomorrow, next week, "
+                    "yesterday, a weekday, or YYYY-MM-DD"
+                ),
+            },
+        },
+        "required": [],
+    }
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
-        del deps, kwargs
-        payload = _api_request("POST", "/calendar/upcoming", {})
+        del deps
+        when = kwargs.get("when")
+        body: dict[str, Any] = {}
+        if when is not None and str(when).strip():
+            body["when"] = str(when).strip()
+        payload = _api_request("POST", "/calendar/upcoming", body)
         logger.info("list_upcoming_events → %s", payload.get("status") or payload.get("error"))
         return payload

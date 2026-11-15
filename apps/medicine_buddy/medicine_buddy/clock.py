@@ -76,3 +76,14 @@ class ClockMixin:
             "utc_offset": now.strftime("%z"),
             "zone_label": name or now.tzname() or "system",
         }
+
+    def clock_now(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Read-only Family-TZ clock for voice tools. Never saves timezone (ignores body)."""
+        del body
+        payload = self.settings_timezone({})
+        if "error" in payload:
+            return payload
+        now = self.now()
+        payload["now_iso"] = now.isoformat(timespec="seconds")
+        payload["weekday"] = now.strftime("%A")
+        return payload

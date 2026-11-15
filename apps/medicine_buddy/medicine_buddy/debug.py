@@ -126,7 +126,7 @@ class DebugMixin:
             },
             "companion": {
                 "encourage_self_care": self.encourage_self_care(),
-                "family_call_configured": bool(self.family_call_url()),
+                "family_call": "coming_soon",
                 "activity_nudges": self.activity_nudges_enabled(),
             },
             "uptime_s": int(time.time() - self.started_at),

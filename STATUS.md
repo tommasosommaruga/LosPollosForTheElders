@@ -1,6 +1,6 @@
 # Medicine Buddy — current status (single check)
 
-**Last updated:** 2026-11-15 · **Code version in this checkout:** `0.8.3` (`medicine_buddy.__version__`)  
+**Last updated:** 2026-11-15 · **Code version in this checkout:** `0.8.12` (`medicine_buddy.__version__`)  
 **Last git commit on `main`:** `65fa163` — *Fix muted Reachy speech after patient-listen VAD patch.*
 
 Use this file to see **what is plugged in and working**, **what is partial / broken**, and **how the pipeline runs**, for **both** places the app lives.
@@ -113,7 +113,7 @@ Legend: **OK** = works end-to-end · **PART** = code present but incomplete/demo
 | DEMO MODE banner / honest dry-run speech | OK | OK |
 | Caregiver Missed alerts (ntfy/webhook) | WIP | NO (until push + reinstall) |
 | Companion check-in loop | WIP | NO |
-| Family video-call URL bridge | WIP | NO |
+| Family video-call (live) | NO — mock “coming soon” only | NO |
 | `suggest_activity` voice tool | WIP | NO |
 | Companion calendar ICS + voice events | WIP (`0.8.0`) | NO (until push + reinstall) |
 | Smart-home / scam-call / games | NO | NO |
@@ -128,8 +128,8 @@ Legend: **OK** = works end-to-end · **PART** = code present but incomplete/demo
 - `caregiver_alerts.py`, hook from `reminders.py` on Missed  
 - `checkins.py` + start from `main.py`  
 - `companion_settings.py`, `activities.py`  
-- Family page panels (alerts, call link, companion toggles)  
-- Tools: `start_family_call.py`, `suggest_activity.py` (+ profile entries)  
+- Family page panels (alerts, companion toggles; video call = coming-soon mock)  
+- Tools: `start_family_call.py` (coming-soon stub), `suggest_activity.py` (+ profile entries)  
 - Docs touch: README / plan / house-help / IMPROVEMENT_PLAN / `.env.example`  
 
 **Intentionally reverted / corrected already:** dispense must ask **“Should I bring it?”** for the **arm** — not “take it yourself first.”
@@ -210,4 +210,4 @@ medicine-buddy demo --dry-run
 
 **Working now (laptop + robot):** Reachy voice companion + schedule DB + confirm + **simulated** dispense + adherence-by-voice + family UI/memories/reminders.  
 **Not working yet (either place):** real **Maker Arm** OCR/motion/place-verify — the Track 4 hardware spine.  
-**Laptop-only WIP:** caregiver alerts / check-ins / call link / activity suggestions — not installed on the robot until shipped to git and reinstalled.
+**Laptop-only WIP:** caregiver alerts / check-ins / activity suggestions — not installed on the robot until shipped to git and reinstalled. Family video call is mock “coming soon” only.

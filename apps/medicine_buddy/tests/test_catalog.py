@@ -67,3 +67,17 @@ def test_catalog_from_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 def test_empty_catalog_rejected() -> None:
     with pytest.raises(ValueError):
         MedicineCatalog({})
+
+
+def test_adrenaline_resolves_on_full_catalog() -> None:
+    cat = MedicineCatalog.load()
+    r = cat.match("adrenaline")
+    assert r.name == "Adrenalin"
+    assert r.how in {"alias", "fuzzy", "exact"}
+
+
+def test_fuzzy_clear_winner_not_ambiguous() -> None:
+    cat = MedicineCatalog({"Adrenalin": [], "Noradrenalin": []})
+    r = cat.match("adrenaline")
+    assert r.name == "Adrenalin"
+    assert r.how == "fuzzy"

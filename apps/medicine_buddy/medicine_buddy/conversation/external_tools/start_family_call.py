@@ -1,4 +1,4 @@
-"""External tool: offer the configured family video-call link (no embedded WebRTC)."""
+"""External tool: family video call — coming soon stub (no live bridge yet)."""
 
 from __future__ import annotations
 
@@ -25,14 +25,14 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
 class StartFamilyCall(Tool):
     name = "start_family_call"
     description = (
-        "When the person wants to video-call family, use this tool. It uses the call link "
-        "saved on the Family settings page (Meet, FaceTime, WhatsApp, Zoom). Never invent a URL. "
-        "Read the speak_hint aloud."
+        "Family video call is coming soon and not available yet. Call this when they ask to "
+        "video-call family, then read the speak_hint aloud — tell them to use their phone or "
+        "tablet for now. Never invent a video link."
     )
     parameters_schema = {"type": "object", "properties": {}, "required": []}
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         del deps, kwargs
         payload = _api_request("POST", "/family/call", {})
-        logger.info("start_family_call → %s", payload)
+        logger.info("start_family_call → %s", payload.get("status") or payload.get("error"))
         return payload

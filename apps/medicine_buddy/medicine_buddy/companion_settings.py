@@ -1,7 +1,7 @@
 """Companion / adaptive-care settings stored in app_settings (Family page + env).
 
 - encourage_self_care: prefer asking the person to take the box themselves before the arm
-- family_call_url / family_call_label: remote video link for caregivers
+- family video call: mock / coming soon (no live link bridge yet)
 - check-in enable + quiet hours + interval
 """
 
@@ -13,9 +13,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 ENCOURAGE_SELF_KEY = "encourage_self_care"
-FAMILY_CALL_URL_KEY = "family_call_url"
-FAMILY_CALL_LABEL_KEY = "family_call_label"
 CHECKIN_ENABLED_KEY = "checkins_enabled"
+FAMILY_CALL_COMING_SOON = (
+    "Family video call is coming soon — not available yet. "
+    "For now, please use your phone or tablet to call family."
+)
 CHECKIN_INTERVAL_KEY = "checkin_interval_hours"
 CHECKIN_QUIET_START_KEY = "checkin_quiet_start"
 CHECKIN_QUIET_END_KEY = "checkin_quiet_end"
@@ -82,61 +84,32 @@ class CompanionSettingsMixin:
         }
 
     def family_call_url(self) -> str:
-        return (self.db.get_setting(FAMILY_CALL_URL_KEY) or "").strip()
+        """Deprecated: call bridge removed; always empty."""
+        return ""
 
     def family_call_label(self) -> str:
-        label = (self.db.get_setting(FAMILY_CALL_LABEL_KEY) or "").strip()
-        return label or "family call"
+        return "family call (coming soon)"
 
     def settings_family_call(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        body = body or {}
-        if "url" in body:
-            try:
-                cleaned = validate_http_url(str(body.get("url") or ""), what="call link")
-            except ValueError as exc:
-                return {"error": str(exc)}
-            self.db.set_setting(FAMILY_CALL_URL_KEY, cleaned)
-        if "label" in body:
-            label = " ".join(str(body.get("label") or "").split())[:80]
-            self.db.set_setting(FAMILY_CALL_LABEL_KEY, label)
-        url = self.family_call_url()
-        label = self.family_call_label()
+        """Mock settings — URL paste / open-call are disabled until the feature ships."""
+        del body
         return {
             "status": "ok",
-            "url": url,
-            "label": label,
-            "configured": bool(url),
-            "message": (
-                f"Family call link saved ({label})."
-                if url else
-                "No family call link yet. Paste a Meet / FaceTime / WhatsApp / Zoom URL."
-            ),
+            "coming_soon": True,
+            "configured": False,
+            "url": "",
+            "label": self.family_call_label(),
+            "message": FAMILY_CALL_COMING_SOON,
         }
 
     def start_family_call(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Voice / tool entry: never invent a URL; point at the Family page if missing."""
+        """Voice / tool entry: coming-soon stub (no live video bridge)."""
         del body
-        url = self.family_call_url()
-        label = self.family_call_label()
-        if not url:
-            return {
-                "status": "needs_setup",
-                "configured": False,
-                "speak_hint": (
-                    "There is no family video-call link set up yet. Ask a caregiver to open the "
-                    "Family settings page on the Medicine Buddy computer and paste a call link "
-                    "(Google Meet, FaceTime, WhatsApp or Zoom)."
-                ),
-            }
         return {
-            "status": "ok",
-            "configured": True,
-            "url": url,
-            "label": label,
-            "speak_hint": (
-                f"A caregiver can start the {label} from the Family settings page on the Medicine "
-                f"Buddy computer — tap Open call. The link is ready: {urlparse(url).netloc}."
-            ),
+            "status": "coming_soon",
+            "configured": False,
+            "coming_soon": True,
+            "speak_hint": FAMILY_CALL_COMING_SOON,
         }
 
     def checkins_enabled(self) -> bool:

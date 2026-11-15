@@ -7,8 +7,10 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -57,6 +59,18 @@ def test_add_bad_time_is_explained(service: MedicineBuddyService) -> None:
     r = service.add_schedule({"name": "Aspirin", "weekdays": "daily", "time": "lunchtime"})
     assert "error" in r and "speak_hint" in r
     assert service.db.list_active_schedules() == []
+
+
+def test_add_tomorrow_stores_recurring_weekday(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pin Family clock to Sunday 2026-11-15 → tomorrow = Monday ("0")
+    pinned = datetime(2026, 11, 15, 15, 30, tzinfo=ZoneInfo("Europe/Zurich"))
+    monkeypatch.setattr(service, "now", lambda: pinned)
+    r = service.add_schedule({"name": "Aspirin", "weekdays": "tomorrow", "time": "9 AM"})
+    assert r["status"] == "ok" and r["verified"] is True
+    assert r["schedule"]["weekdays"] == "0"
+    assert "every Monday at 9 AM" in r["speak_hint"]
 
 
 # ---------------------------------------------------------------- update

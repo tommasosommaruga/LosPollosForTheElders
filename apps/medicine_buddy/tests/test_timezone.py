@@ -105,6 +105,68 @@ def test_due_and_debug_use_the_zone(svc: MedicineBuddyService) -> None:
     assert svc.debug_snapshot()["now"].endswith(("+12:00", "+13:00"))
 
 
+def test_settings_timezone_report_includes_robot_clock(svc: MedicineBuddyService) -> None:
+    svc.settings_timezone({"timezone": "Europe/Zurich"})
+    report = svc.settings_timezone({})
+    assert report["status"] == "ok"
+    assert report["timezone"] == "Europe/Zurich"
+    assert re.fullmatch(r"\d{2}:\d{2}", report["robot_time"])
+    assert report["robot_date"]  # e.g. "Sun 15 Nov 2026"
+
+
+def test_clock_now_adds_iso_and_weekday(svc: MedicineBuddyService) -> None:
+    svc.settings_timezone({"timezone": "Europe/Zurich"})
+    payload = svc.clock_now({"timezone": "America/New_York"})  # body ignored — read-only
+    assert payload["timezone"] == "Europe/Zurich"
+    assert "T" in payload["now_iso"]
+    assert payload["weekday"] in {
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    }
+    assert payload["robot_date"]
+    assert payload["robot_time"]
+
+
+def test_clock_now_http_route(svc: MedicineBuddyService) -> None:
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(svc))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        req = urllib.request.Request(
+            f"{base}/clock/now",
+            data=b"{}",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        payload = json.loads(urllib.request.urlopen(req, timeout=5).read())
+        assert payload["status"] == "ok"
+        assert "now_iso" in payload and "weekday" in payload
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_get_robot_time_tool_module_imports() -> None:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "medicine_buddy"
+        / "conversation"
+        / "external_tools"
+        / "get_robot_time.py"
+    )
+    src = path.read_text(encoding="utf-8")
+    assert 'name = "get_robot_time"' in src
+    assert '"/clock/now"' in src
+    profile = (
+        Path(__file__).resolve().parents[1]
+        / "medicine_buddy"
+        / "conversation"
+        / "external_profiles"
+        / "medicine_caregiver"
+        / "profile.md"
+    ).read_text(encoding="utf-8")
+    assert '"get_robot_time"' in profile
+
+
 # ---- the page route (HTTP, :8787)
 
 def test_timezone_route_and_page(svc: MedicineBuddyService) -> None:

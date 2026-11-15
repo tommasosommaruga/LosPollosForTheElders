@@ -49,6 +49,8 @@ LAST_SYNC_ERROR_KEY = "calendar_last_sync_error"
 SYNC_INTERVAL_S = 15 * 60
 FETCH_TIMEOUT_S = 12
 FETCH_MAX_BYTES = 1_500_000
+# Voice must not wait forever on Google; finish in background if slower than this.
+GOOGLE_VOICE_WAIT_S = 3.5
 GOOGLE_HINT = (
     "Subscribe link is pull-only. For voice create/cancel into Google Calendar, "
     "set OAuth env vars and the calendar id (see Google write section)."
@@ -649,12 +651,17 @@ class CalendarMixin:
             when = f"on {starts_at} at {describe_time(time_hhmm)}"
         else:
             when = "as an all-day note"
-        google_note, google_ok = self._push_create_to_google(ev)
+        google_note, google_ok, google_pending = self._push_create_to_google_voice(ev)
         gcfg = self._google_cfg()
         if google_ok:
             hint = (
                 f"I've added “{title}” to your Google Calendar "
                 f"({gcfg.calendar_id}) {when}."
+            )
+        elif google_pending:
+            hint = (
+                f"I've put “{title}” on the calendar {when}, "
+                "and I'm syncing it to Google Calendar now."
             )
         elif gcfg.configured:
             hint = (
@@ -671,6 +678,7 @@ class CalendarMixin:
             "status": "ok",
             "event": _event_json(self.db.get_calendar_event(ev.id) or ev),
             "google_pushed": google_ok,
+            "google_pending": google_pending,
             "google_configured": gcfg.configured,
             "google_calendar_id": gcfg.calendar_id,
             "speak_hint": hint,
@@ -734,6 +742,40 @@ class CalendarMixin:
         except Exception as exc:  # noqa: BLE001
             logger.info("Google Calendar create failed: %s", exc)
             return (f"(Could not sync to Google: {str(exc)[:120]})", False)
+
+    def _push_create_to_google_voice(
+        self, ev: CalendarEvent
+    ) -> tuple[str, bool, bool]:
+        """Voice path: wait briefly for Google, else finish in a daemon thread.
+
+        Returns ``(note, pushed_ok, pending)``. ``pending`` means sync continues
+        in the background so the realtime voice turn can answer immediately.
+        """
+        cfg = self._google_cfg()
+        if not cfg.configured:
+            return ("", False, False)
+
+        box: dict[str, Any] = {}
+
+        def _work() -> None:
+            note, ok = self._push_create_to_google(ev)
+            box["note"] = note
+            box["ok"] = ok
+
+        thread = threading.Thread(
+            target=_work,
+            name=f"gcal-create-{ev.id}",
+            daemon=True,
+        )
+        thread.start()
+        thread.join(timeout=GOOGLE_VOICE_WAIT_S)
+        if thread.is_alive():
+            logger.info(
+                "Google Calendar create still running after %.1fs; continuing in background",
+                GOOGLE_VOICE_WAIT_S,
+            )
+            return ("", False, True)
+        return (str(box.get("note") or ""), bool(box.get("ok")), False)
 
     def _push_cancel_to_google(self, ev: CalendarEvent) -> str:
         cfg = self._google_cfg()

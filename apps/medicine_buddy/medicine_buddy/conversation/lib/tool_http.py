@@ -24,7 +24,8 @@ def api_request(method: str, path: str, body: dict[str, Any] | None = None) -> d
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        # Keep short: a hung /calendar/create (Google) must not stall the voice session.
+        with urllib.request.urlopen(req, timeout=25) as resp:
             raw = resp.read().decode("utf-8")
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:

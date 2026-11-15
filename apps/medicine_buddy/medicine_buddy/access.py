@@ -284,6 +284,9 @@ class PeopleAccessMixin:
             stored = self.db.get_memory(mem.id)
         if stored is None or stored.text != text.strip():
             return {"error": "memory could not be verified", "speak_hint": "Something went wrong saving that."}
+        # Story/memory dictation is done — restore snappy turn-taking.
+        if hasattr(self, "set_listen_patient") and self.is_listen_patient():
+            self.set_listen_patient(False)
         return {
             "status": "ok",
             "verified": True,

@@ -26,6 +26,7 @@ import os
 import sys
 import threading
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -80,6 +81,8 @@ from medicine_buddy.wake import start_wake_greeting  # noqa: E402
 from medicine_buddy.web_ui import attach_web_ui  # noqa: E402
 
 _SERVICE: MedicineBuddyService | None = None
+_ACTIVE_HF_HANDLER: Any = None  # HuggingFaceRealtimeHandler when conversation is live
+_CONV_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 def _install_transcript_hook() -> None:
@@ -100,6 +103,98 @@ def _install_transcript_hook() -> None:
 
     ConversationHandler._emit_transcript = emit_and_guard
     ConversationHandler._medicine_buddy_hooked = True
+
+
+def _silence_ms_for(patient: bool) -> int:
+    from medicine_buddy.listen_mode import LISTEN_SILENCE_MS, NORMAL_SILENCE_MS
+
+    return LISTEN_SILENCE_MS if patient else NORMAL_SILENCE_MS
+
+
+def _install_listen_vad_hook(service: MedicineBuddyService) -> None:
+    """Track the live HF handler and push ServerVad silence when listen mode toggles."""
+    from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
+    from reachy_mini_conversation_app.huggingface_realtime import HuggingFaceRealtimeHandler
+
+    if getattr(HuggingFaceRealtimeHandler, "_medicine_buddy_listen_hooked", False):
+        service.set_vad_applier(_schedule_vad_update)
+        return
+
+    original_init = HuggingFaceRealtimeHandler.__init__
+    original_session_config = HuggingFaceRealtimeHandler._get_session_config
+
+    def hooked_init(self, *args: Any, **kwargs: Any) -> None:
+        global _ACTIVE_HF_HANDLER
+        original_init(self, *args, **kwargs)
+        _ACTIVE_HF_HANDLER = self
+
+    def hooked_session_config(self, tool_specs: Any) -> Any:
+        cfg = original_session_config(self, tool_specs)
+        patient = bool(service.is_listen_patient())
+        silence = _silence_ms_for(patient)
+        # Session config is a TypedDict-like mapping; set silence without dropping other fields.
+        try:
+            audio = dict(cfg.get("audio") or {})
+            input_cfg = dict(audio.get("input") or {})
+            input_cfg["turn_detection"] = ServerVad(
+                type="server_vad",
+                interrupt_response=True,
+                silence_duration_ms=silence,
+            )
+            audio["input"] = input_cfg
+            cfg = {**cfg, "audio": audio}
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not set silence_duration_ms=%s on session config", silence)
+        return cfg
+
+    HuggingFaceRealtimeHandler.__init__ = hooked_init  # type: ignore[method-assign]
+    HuggingFaceRealtimeHandler._get_session_config = hooked_session_config  # type: ignore[method-assign]
+    HuggingFaceRealtimeHandler._medicine_buddy_listen_hooked = True
+    service.set_vad_applier(_schedule_vad_update)
+
+
+def _schedule_vad_update(patient: bool) -> bool:
+    """Apply silence_duration_ms on the live realtime session from the API thread."""
+    handler = _ACTIVE_HF_HANDLER
+    loop = _CONV_LOOP
+    if handler is None or loop is None or not getattr(handler, "connection", None):
+        return False
+
+    async def _update() -> None:
+        from openai.types.realtime import (
+            RealtimeAudioConfigInputParam,
+            RealtimeAudioConfigParam,
+            RealtimeSessionCreateRequestParam,
+        )
+        from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
+
+        conn = handler.connection
+        if conn is None:
+            return
+        silence = _silence_ms_for(patient)
+        await conn.session.update(
+            session=RealtimeSessionCreateRequestParam(
+                type="realtime",
+                audio=RealtimeAudioConfigParam(
+                    input=RealtimeAudioConfigInputParam(
+                        turn_detection=ServerVad(
+                            type="server_vad",
+                            interrupt_response=True,
+                            silence_duration_ms=silence,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        logger.info("Live VAD silence_duration_ms → %s (patient=%s)", silence, patient)
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(_update(), loop)
+        fut.result(timeout=5)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.exception("Live VAD update failed (patient=%s)", patient)
+        return False
 
 
 class MedicineBuddy(ReachyMiniApp):
@@ -123,11 +218,18 @@ class MedicineBuddy(ReachyMiniApp):
             attach_web_ui(self.settings_app, lambda: _SERVICE)
 
     def _run_conversation(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        asyncio.set_event_loop(asyncio.new_event_loop())
-        args, _ = conversation.parse_args()
-        instance_path = str(conversation.resolve_instance_path(self._get_instance_path().parent))
-        conversation.run(args, robot=reachy_mini, app_stop_event=stop_event,
-                         settings_app=self.settings_app, instance_path=instance_path)
+        global _CONV_LOOP, _ACTIVE_HF_HANDLER
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _CONV_LOOP = loop
+        try:
+            args, _ = conversation.parse_args()
+            instance_path = str(conversation.resolve_instance_path(self._get_instance_path().parent))
+            conversation.run(args, robot=reachy_mini, app_stop_event=stop_event,
+                             settings_app=self.settings_app, instance_path=instance_path)
+        finally:
+            _CONV_LOOP = None
+            _ACTIVE_HF_HANDLER = None
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
         global _SERVICE
@@ -138,6 +240,7 @@ class MedicineBuddy(ReachyMiniApp):
         service, server, _ = start_server(host, port, db_path, AppConfig(dry_run=True), voice_guard=guard)
         _SERVICE = service
         _install_transcript_hook()
+        _install_listen_vad_hook(service)
         reminders = None
         speaker = None
         if os.environ.get("MEDICINE_BUDDY_REMINDERS", "1").lower() not in {"0", "false", "no", "off"}:

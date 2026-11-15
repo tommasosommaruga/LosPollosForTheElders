@@ -23,3 +23,5 @@ apps/medicine_buddy/data/waypoints/*.json
 
 # Local settings (copy .env.example)
 .env
+
+docs/superpowers/

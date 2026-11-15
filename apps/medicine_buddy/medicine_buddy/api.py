@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from medicine_buddy.access import PeopleAccessMixin
 from medicine_buddy.debug import DebugMixin
 from medicine_buddy.family_page import render_family_page
+from medicine_buddy.listen_mode import ListenModeMixin
 from medicine_buddy.settings import SettingsMixin
 from medicine_buddy.catalog import MedicineCatalog
 from medicine_buddy.clock import ClockMixin
@@ -50,7 +51,9 @@ def _whose(person: Person | None) -> str:
     return f" for {person.name}" if person else ""
 
 
-class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMixin, TranscriptMixin):
+class MedicineBuddyService(
+    PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMixin, TranscriptMixin, ListenModeMixin,
+):
     def __init__(
         self,
         db_path: Path,
@@ -69,6 +72,7 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMi
         self._init_settings()
         self._init_debug()
         self._init_transcript()
+        self._init_listen_mode()
 
     def family_page(self) -> str:
         return render_family_page(self.settings_token)
@@ -767,6 +771,7 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/doses/run": service.run_dose,
         "/doses/adherence": service.mark_adherence,
         "/voice/heard": service.voice_heard,  # loopback only, see _post
+        "/voice/listen_mode": service.listen_mode,  # loopback only — patient story listening
         "/medicines/list": service.list_medicines,
         "/people/register": service.register_person,
         "/people/list": service.list_people_info,
@@ -901,8 +906,8 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
             if route is None:
                 _send_json(self, 404, {"error": f"unknown path {path}"})
                 return
-            if path == "/voice/heard" and self.client_address[0] not in loopback:
-                _send_json(self, 403, {"error": "voice transcripts are only accepted from this computer"})
+            if path in {"/voice/heard", "/voice/listen_mode"} and self.client_address[0] not in loopback:
+                _send_json(self, 403, {"error": "voice control is only accepted from this computer"})
                 return
             payload = route(body)
             _send_json(self, 400 if "error" in payload else 200, payload)

@@ -126,6 +126,7 @@ class DebugMixin:
                 "database": str(self.db.path),
                 "catalog_size": len(self.catalog.names),
             },
+            "listen_mode": self.listen_mode({}),
             "voice_guard": {
                 "require_passphrases": self.require_passphrases(),
                 "enabled": g.enabled,

@@ -17,7 +17,7 @@ from medicine_buddy.calendar_ics import (
     parse_ics,
     weekdays_to_byday,
 )
-from medicine_buddy.calendar_mirror import medicine_mirror_uid
+from medicine_buddy.calendar_mirror import medicine_mirror_uid, mirror_schedule
 from medicine_buddy.catalog import MedicineCatalog
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database
@@ -210,6 +210,7 @@ def test_resync_updates_accepted_medicine_schedule_time(service: MedicineBuddySe
     ])
     result = service.sync_calendar_import(ics_text=second)
     assert result["status"] == "ok"
+    assert result["schedules_updated"] == 1
     # No new proposal when an active schedule already exists for that medicine.
     assert service.db.list_calendar_events(status="proposed", kind="medicine") == []
     schedules = service.db.list_active_schedules()
@@ -220,6 +221,37 @@ def test_resync_updates_accepted_medicine_schedule_time(service: MedicineBuddySe
     assert mirror is not None
     assert mirror.time_hhmm == "09:15"
     assert mirror.weekdays == "0,2,4"
+    # Idempotent re-sync must not recount an unchanged schedule.
+    again = service.sync_calendar_import(ics_text=second)
+    assert again["status"] == "ok"
+    assert again["schedules_updated"] == 0
+
+
+def test_ambiguous_multi_dose_ics_does_not_clobber_schedules(
+    service: MedicineBuddyService,
+) -> None:
+    """Two schedules for one medicine + unmatched ICS time must not touch either row."""
+    med = service.db.add_medicine("Aspirin")
+    morning = service.db.add_schedule(med.id, "*", "08:00")
+    evening = service.db.add_schedule(med.id, "*", "20:00")
+    ics = build_calendar([
+        build_vevent(
+            uid="ambig-med@x",
+            summary="Med: Aspirin",
+            time_hhmm="12:00",
+            weekdays="1,3",
+        ),
+    ])
+    result = service.sync_calendar_import(ics_text=ics)
+    assert result["status"] == "ok"
+    assert result["schedules_updated"] == 0
+    by_id = {s.id: s for s in service.db.list_active_schedules()}
+    assert by_id[morning.id].time_hhmm == "08:00" and by_id[morning.id].weekdays == "*"
+    assert by_id[evening.id].time_hhmm == "20:00" and by_id[evening.id].weekdays == "*"
+    proposals = service.db.list_calendar_events(status="proposed", kind="medicine")
+    assert len(proposals) == 1
+    assert proposals[0].time_hhmm == "12:00"
+    assert proposals[0].weekdays == "1,3"
 
 
 def test_create_and_cancel_companion_event(service: MedicineBuddyService) -> None:
@@ -237,6 +269,21 @@ def test_create_and_cancel_companion_event(service: MedicineBuddyService) -> Non
     done = service.cancel_calendar_event({"title": "Garden walk", "confirmed": True})
     assert done["status"] == "ok"
     assert service.db.list_calendar_events(status="active", kind="companion") == []
+
+
+def test_create_calendar_event_starts_at_uses_service_now(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default starts_at follows Family clock (self.now), not the host date.today()."""
+    service.db.set_setting("timezone", "Europe/Zurich")
+    monkeypatch.setattr(service, "now", lambda: SUN_EVENING)
+    created = service.create_calendar_event({
+        "title": "Garden walk",
+        "weekdays": "daily",
+        "time": "10:00",
+    })
+    assert created["status"] == "ok"
+    assert created["event"]["starts_at"] == "2026-11-15"
 
 
 def test_list_upcoming_when_tomorrow_includes_monday_med(
@@ -299,10 +346,66 @@ def test_settings_calendar_roundtrip(service: MedicineBuddyService) -> None:
     first = service.settings_calendar({})
     assert first["status"] == "ok"
     assert first["export_token"]
+    assert first["google_hint"]
+    assert "public/tunnel" in first["google_hint"]
+    assert first["unified"] == []
+    assert "last_sync" in first and "last_sync_error" in first
     rotated = service.settings_calendar({"rotate_token": True})
     assert rotated["export_token"] != first["export_token"]
     saved = service.settings_calendar({"import_url": "https://example.com/cal.ics"})
     assert saved["import_url"] == "https://example.com/cal.ics"
+
+
+def test_settings_calendar_unified_list(service: MedicineBuddyService) -> None:
+    med = service.db.add_medicine("Aspirin")
+    service.db.add_schedule(med.id, "0,2,4", "09:00")
+    service.db.upsert_calendar_event(
+        uid="local-walk@medicine-buddy",
+        kind="companion",
+        title="Garden walk",
+        time_hhmm="15:00",
+        weekdays="*",
+        source="local",
+        status="active",
+    )
+    payload = service.settings_calendar({})
+    assert payload["status"] == "ok"
+    kinds = {row["kind"] for row in payload["unified"]}
+    assert kinds == {"medicine", "companion"}
+    med_row = next(r for r in payload["unified"] if r["kind"] == "medicine")
+    assert med_row["title"] == medicine_summary("Aspirin")
+    assert med_row["weekdays"] == "0,2,4"
+    assert med_row["time_hhmm"] == "09:00"
+    assert med_row["status"] == "active"
+    assert med_row["source"] == "local"
+    companion = next(r for r in payload["unified"] if r["kind"] == "companion")
+    assert companion["title"] == "Garden walk"
+    assert companion["time_hhmm"] == "15:00"
+    assert set(med_row) == {"kind", "title", "weekdays", "time_hhmm", "source", "status"}
+
+
+def test_unified_list_skips_legacy_non_mirror_medicine(
+    service: MedicineBuddyService,
+) -> None:
+    """Legacy active medicine rows (non mb-med-*) must not duplicate the mirror."""
+    med = service.db.add_medicine("Aspirin")
+    schedule = service.db.add_schedule(med.id, "*", "09:00")
+    mirror_schedule(service.db, schedule, med)
+    service.db.upsert_calendar_event(
+        uid="legacy-import-med@x",
+        kind="medicine",
+        title=medicine_summary("Aspirin"),
+        time_hhmm="09:00",
+        weekdays="*",
+        medicine_name="Aspirin",
+        source="import",
+        status="active",
+    )
+    payload = service.settings_calendar({})
+    med_rows = [r for r in payload["unified"] if r["kind"] == "medicine"]
+    assert len(med_rows) == 1
+    assert med_rows[0]["title"] == medicine_summary("Aspirin")
+    assert med_rows[0]["time_hhmm"] == "09:00"
 
 
 def _one(dtstart_line: str) -> str:

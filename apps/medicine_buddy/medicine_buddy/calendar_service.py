@@ -12,7 +12,7 @@ import threading
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from medicine_buddy.calendar_ics import (
@@ -38,6 +38,10 @@ LAST_SYNC_ERROR_KEY = "calendar_last_sync_error"
 SYNC_INTERVAL_S = 15 * 60
 FETCH_TIMEOUT_S = 12
 FETCH_MAX_BYTES = 1_500_000
+GOOGLE_HINT = (
+    "Google cloud needs a public/tunnel export URL; "
+    "LAN calendar apps can use the subscribe link."
+)
 
 
 def _event_json(ev: CalendarEvent) -> dict[str, Any]:
@@ -53,6 +57,18 @@ def _event_json(ev: CalendarEvent) -> dict[str, Any]:
         "all_day": ev.all_day,
         "person_id": ev.person_id,
         "medicine_name": ev.medicine_name,
+        "source": ev.source,
+        "status": ev.status,
+    }
+
+
+def _unified_entry(ev: CalendarEvent) -> dict[str, Any]:
+    """Slim row for the Family panel unified timeline."""
+    return {
+        "kind": ev.kind,
+        "title": ev.title,
+        "weekdays": ev.weekdays,
+        "time_hhmm": ev.time_hhmm,
         "source": ev.source,
         "status": ev.status,
     }
@@ -132,6 +148,8 @@ class CalendarMixin:
             sync = self.sync_calendar_import()
             if sync.get("error") and not sync.get("status"):
                 return sync
+        # Mirrors power the Family unified list; keep them in sync with schedules.
+        backfill_medicine_mirrors(self.db)
         proposals = [_event_json(e) for e in self.db.list_calendar_events(status="proposed", kind="medicine")]
         upcoming = self._upcoming_companion_summaries(limit=8)
         token = self.calendar_export_token()
@@ -142,6 +160,8 @@ class CalendarMixin:
             "import_url": self.calendar_import_url(),
             "last_sync": self.db.get_setting(LAST_SYNC_KEY) or "",
             "last_sync_error": self.db.get_setting(LAST_SYNC_ERROR_KEY) or "",
+            "google_hint": GOOGLE_HINT,
+            "unified": self._unified_calendar_entries(),
             "proposals": proposals,
             "upcoming": upcoming,
             "message": (
@@ -150,6 +170,45 @@ class CalendarMixin:
                 "Calendar token missing; rotate to create one."
             ),
         }
+
+    def _unified_calendar_entries(self) -> list[dict[str, Any]]:
+        """Active mb-med-* mirrors (+ schedule fallback) and companion events for Family UI.
+
+        Legacy active ``kind=medicine`` rows (non ``mb-med-*`` uids) are skipped so
+        import leftovers cannot duplicate a schedule that already has a mirror.
+        """
+        entries: list[dict[str, Any]] = []
+        for ev in self.db.list_calendar_events(status="active", kind="medicine", limit=500):
+            if not ev.uid.startswith("mb-med-"):
+                continue
+            entries.append(_unified_entry(ev))
+        for schedule in self.db.list_active_schedules():
+            mirror = self.db.get_calendar_event_by_uid(medicine_mirror_uid(schedule.id))
+            if mirror is not None and mirror.status == "active":
+                continue
+            med = self.db.get_medicine(schedule.medicine_id)
+            if med is None:
+                continue
+            entries.append(
+                {
+                    "kind": "medicine",
+                    "title": medicine_summary(med.name),
+                    "weekdays": schedule.weekdays,
+                    "time_hhmm": schedule.time_hhmm,
+                    "source": "local",
+                    "status": "active",
+                }
+            )
+        for ev in self.db.list_calendar_events(status="active", kind="companion", limit=500):
+            entries.append(_unified_entry(ev))
+        entries.sort(
+            key=lambda row: (
+                row.get("time_hhmm") or "99:99",
+                0 if row.get("kind") == "medicine" else 1,
+                row.get("title") or "",
+            )
+        )
+        return entries
 
     def accept_calendar_proposal(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
         body = body or {}
@@ -242,15 +301,20 @@ class CalendarMixin:
                     skipped += 1
                     continue
                 person_id = existing.person_id if existing else None
-                if self._sync_medicine_against_schedule(
+                sync_result = self._sync_medicine_against_schedule(
                     match_name=match.name,
                     weekdays=weekdays,
                     time_hhmm=item.time_hhmm,
                     person_id=person_id,
                     uid=item.uid,
-                ):
+                )
+                if sync_result == "updated":
                     updated_n += 1
                     continue
+                if sync_result == "matched":
+                    # Confident match, already in sync — do not propose or recount.
+                    continue
+                # No schedule, or ambiguous multi-dose: leave schedules as-is; propose.
                 self.db.upsert_calendar_event(
                     uid=item.uid,
                     kind="medicine",
@@ -324,23 +388,31 @@ class CalendarMixin:
         time_hhmm: str,
         person_id: int | None,
         uid: str,
-    ) -> bool:
-        """If an active schedule exists for this medicine(+person), update/remirror when ICS changed.
+    ) -> Literal["updated", "matched", "miss"]:
+        """Match ICS medicine to an active schedule when the match is confident.
 
-        Returns True when an active schedule was found (updated or already matching).
+        Returns:
+          ``updated`` — weekdays/time changed on a confident match (+ remirror)
+          ``matched`` — confident match already aligned (remirror only)
+          ``miss`` — no catalog medicine, no schedules, or ambiguous multi-dose
         """
         medicine = self._find_catalog_medicine(match_name, person_id)
         if medicine is None:
-            return False
+            return "miss"
         schedules = self.db.list_schedules_for_medicine(medicine.id)
         if not schedules:
-            return False
-        schedule = self._pick_schedule_for_import(schedules, uid=uid, weekdays=weekdays, time_hhmm=time_hhmm)
-        if schedule.weekdays != weekdays or schedule.time_hhmm != time_hhmm:
+            return "miss"
+        schedule = self._pick_schedule_for_import(
+            schedules, uid=uid, weekdays=weekdays, time_hhmm=time_hhmm
+        )
+        if schedule is None:
+            return "miss"
+        changed = schedule.weekdays != weekdays or schedule.time_hhmm != time_hhmm
+        if changed:
             schedule = self.db.update_schedule(schedule.id, weekdays=weekdays, time_hhmm=time_hhmm)
         # Mirror is the stable mb-med-* row; do not reactivate the ICS-import proposal uid.
         mirror_schedule(self.db, schedule, medicine)
-        return True
+        return "updated" if changed else "matched"
 
     def _find_catalog_medicine(self, name: str, person_id: int | None) -> Medicine | None:
         med = self.db.get_medicine_by_name(name, person_id)
@@ -361,11 +433,16 @@ class CalendarMixin:
         uid: str,
         weekdays: str,
         time_hhmm: str,
-    ) -> Schedule:
-        """Prefer exact weekdays/time match, else prior ICS-linked times, else first active."""
+    ) -> Schedule | None:
+        """Confident match only: exact weekdays+time, sole schedule, or prior ICS link.
+
+        Never falls through to an arbitrary ``schedules[0]`` when multi-dose is ambiguous.
+        """
         for schedule in schedules:
             if schedule.weekdays == weekdays and schedule.time_hhmm == time_hhmm:
                 return schedule
+        if len(schedules) == 1:
+            return schedules[0]
         prior = self.db.get_calendar_event_by_uid(uid)
         if prior is not None and prior.time_hhmm:
             for schedule in schedules:
@@ -373,7 +450,7 @@ class CalendarMixin:
                     not prior.weekdays or schedule.weekdays == prior.weekdays
                 ):
                     return schedule
-        return schedules[0]
+        return None
 
     def _looks_like_medicine(self, summary: str) -> bool:
         match = self.catalog.match(summary or "")
@@ -491,7 +568,7 @@ class CalendarMixin:
             description=str(body.get("description") or "").strip()[:500],
             weekdays=weekdays,
             time_hhmm=time_hhmm,
-            starts_at=str(body.get("date") or date.today().isoformat()),
+            starts_at=str(body.get("date") or self.now().date().isoformat()),
             all_day=not bool(time_hhmm),
             person_id=person.id if person else None,
             source="local",

@@ -63,6 +63,13 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Profile: freer emotions (`play_emotion`, `dance`, `move_head`, `sweep_look`, …); package version bumped (health uses `__version__`)
 - Tests: `test_listen_mode.py`, passphrase master-switch coverage in `test_family_settings.py`
 
+## v0.9.0 — unified clock + calendar timeline (done)
+
+- `get_robot_time` voice tool (Family timezone); profile: never invent date/time or events
+- `list_upcoming_events(when=…)` unified meds + companion window (`soon` = now → end of tomorrow)
+- Schedule “tomorrow” / relative weekdays; catalog clear-winner + adrenaline aliases
+- Medicine rows mirrored into `calendar_events`; harder ICS import sync; Family unified list + Google reachability hint
+
 ## v0.8.12 — family video call → coming soon mock (done)
 
 - Removed working call-link save / Open call / URL bridge behaviour

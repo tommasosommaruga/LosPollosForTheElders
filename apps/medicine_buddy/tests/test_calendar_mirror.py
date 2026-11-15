@@ -92,6 +92,27 @@ def test_backfill_medicine_mirrors_active_only(db: Database) -> None:
     assert db.get_calendar_event_by_uid(medicine_mirror_uid(dead.id)) is None
 
 
+def test_backfill_cancels_legacy_non_mirror_medicine(db: Database) -> None:
+    asp = db.add_medicine("Aspirin")
+    schedule = db.add_schedule(asp.id, "*", "09:00")
+    db.upsert_calendar_event(
+        uid="legacy-import-med@x",
+        kind="medicine",
+        title=medicine_summary("Aspirin"),
+        time_hhmm="09:00",
+        weekdays="*",
+        medicine_name="Aspirin",
+        source="import",
+        status="active",
+    )
+    count = backfill_medicine_mirrors(db)
+    assert count == 1
+    legacy = db.get_calendar_event_by_uid("legacy-import-med@x")
+    assert legacy is not None and legacy.status == "cancelled"
+    mirror = db.get_calendar_event_by_uid(medicine_mirror_uid(schedule.id))
+    assert mirror is not None and mirror.status == "active"
+
+
 def test_add_schedule_api_creates_mirror(service: MedicineBuddyService) -> None:
     r = service.add_schedule({"name": "Aspirin", "weekdays": "daily", "time": "09:00"})
     assert r["status"] == "ok"

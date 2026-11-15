@@ -39,7 +39,11 @@ def cancel_mirror(db: Database, schedule_id: int) -> CalendarEvent | None:
 
 
 def backfill_medicine_mirrors(db: Database) -> int:
-    """Ensure every active schedule has an active medicine mirror row. Returns count upserted."""
+    """Ensure every active schedule has an active medicine mirror row. Returns count upserted.
+
+    Also cancels legacy active ``kind=medicine`` rows whose uid is not ``mb-med-*``
+    so import leftovers cannot sit beside the stable mirror.
+    """
     count = 0
     for schedule in db.list_active_schedules():
         medicine = db.get_medicine(schedule.medicine_id)
@@ -47,4 +51,8 @@ def backfill_medicine_mirrors(db: Database) -> int:
             continue
         mirror_schedule(db, schedule, medicine)
         count += 1
+    for ev in db.list_calendar_events(status="active", kind="medicine", limit=500):
+        if ev.uid.startswith("mb-med-"):
+            continue
+        db.set_calendar_event_status(ev.id, "cancelled")
     return count

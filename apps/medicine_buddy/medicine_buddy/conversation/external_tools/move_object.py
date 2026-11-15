@@ -29,8 +29,9 @@ class MoveObject(Tool):
         "(water bottle, closed box, similar rigid item the gripper can hold). "
         "For medicine reminders use dispense_medicine instead. "
         "Ask the person first; only call with confirmed=true after a clear yes. "
-        "Never invent stage directions or wait silently — always speak the speak_hint "
-        "(including that you sent a JSON request to the arm). "
+        "BEFORE calling with confirmed=true, briefly say you are asking the arm now and "
+        "it may take a moment. The server also speaks a short wait line. "
+        "After the tool returns, always read speak_hint (placed / unreachable / error). "
         "Refuse people, hot liquids, sharps, or opening packaging. "
         "The arm team handles vision and motion; this only sends a JSON request."
     )

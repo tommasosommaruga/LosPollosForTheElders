@@ -193,6 +193,25 @@ class RpcSpeaker:
             self.state, self.last_event = "thinking", self._clock()
         return True
 
+    def speak_progress(self, text: str) -> bool:
+        """Speak during a long in-flight tool (arm wait). Bypasses pending_tools gate.
+
+        Used so the person hears "I'm asking the arm now…" while HTTP to the arm PC
+        is still blocking. Best-effort; never raises.
+        """
+        line = " ".join(str(text or "").split())
+        if not line:
+            return False
+        try:
+            ok = _say_once(self.url, line, self.timeout)
+        except Exception as exc:  # noqa: BLE001 — progress must not break the arm call
+            logger.warning("speak_progress failed: %s", exc)
+            return False
+        if ok:
+            with self._lock:
+                self.state, self.last_event = "speaking", self._clock()
+        return ok
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             return {"watching": self.connected, "state": self.state, "pending_tools": self.pending_tools,

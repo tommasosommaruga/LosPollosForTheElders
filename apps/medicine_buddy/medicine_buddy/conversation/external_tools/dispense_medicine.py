@@ -26,10 +26,10 @@ class DispenseMedicine(Tool):
     name = "dispense_medicine"
     description = (
         "Ask the person first if you should bring the medicine. Only call this with "
-        "confirmed=true after they say yes. This POSTs a JSON package to the Maker Arm "
-        "computer to find the labeled box and place it in the bowl. "
-        "Always speak the speak_hint from the result aloud (say that you are sending "
-        "the request to the arm, then whether it was placed). Do not invent dosing advice."
+        "confirmed=true after they say yes. BEFORE that call, briefly say you are asking "
+        "the arm now and it may take a moment. This POSTs JSON to the Maker Arm PC to "
+        "find the labeled box and place it in the bowl (can take up to ~90s). "
+        "Always read the result speak_hint aloud when it returns. Do not invent dosing advice."
     )
     parameters_schema = {
         "type": "object",

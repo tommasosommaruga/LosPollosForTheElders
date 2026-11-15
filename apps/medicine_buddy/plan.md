@@ -4,6 +4,13 @@
 
 First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm gate, OCR confidence gate, place verify, adherence voice fallback. Hardware Reachy/Maker Arm wired behind ports later.
 
+## v0.10.16 — arm wait feedback + long tool timeout (done)
+
+- Speak a short progress line while arm HTTP is in flight (`speak_progress`)
+- Voice tools use ~100s timeout for `/arm/*` and `/doses/run` (was 25s → false timeouts)
+- `/health` reports `arm_url` + `arm_reachable` TCP probe
+- Profile/tools: say “asking the arm now” before confirmed move/dispense
+
 ## v0.10.15 — fast verbatim memories + tone_note (done)
 
 - Skip PBKDF2 passphrase-in-story scans when passphrases are OFF (fixed robot `save_memory` timeouts)

@@ -296,6 +296,71 @@ def test_api_move_object_unreachable_arm_gives_feedback(tmp_path: Path) -> None:
     assert "green bottle" in done["speak_hint"]
 
 
+def test_api_move_object_announces_progress_before_arm_post(tmp_path: Path, monkeypatch) -> None:
+    """While waiting on a reachable arm, speak a short wait line before the long POST."""
+    from medicine_buddy import http_arm as http_arm_mod
+
+    heard: list[str] = []
+
+    class _OkArm(HttpArmClient):
+        def probe_reachable(self, timeout_s: float = 2.0) -> bool:
+            return True
+
+        def move_object(self, **kwargs):
+            from medicine_buddy.arm_protocol import MoveObjectResult
+
+            return MoveObjectResult(
+                request_id="r1",
+                ok=True,
+                final_state="placed",
+                detect_detail="ok",
+            )
+
+    monkeypatch.setattr(http_arm_mod, "HttpArmClient", _OkArm)
+    # from_config still constructs via the class in api module — patch there too
+    import medicine_buddy.api as api_mod
+
+    monkeypatch.setattr(api_mod, "HttpArmClient", _OkArm)
+
+    cat = MedicineCatalog({"Aspirin": []})
+    svc = MedicineBuddyService(
+        tmp_path / "prog.db",
+        AppConfig(dry_run=False, arm_url="http://arm.test:9090", arm_timeout_seconds=90.0),
+        cat,
+        VoiceGuard(cat, enabled=False),
+    )
+    svc.progress_speaker = lambda text: heard.append(text) or True
+    svc.move_object({"object_label": "water bottle", "confirmed": False})
+    done = svc.move_object({
+        "object_label": "water bottle",
+        "destination": "bowl",
+        "confirmed": True,
+    })
+    assert done["status"] == "ok"
+    assert heard, "expected a progress announcement while waiting on the arm"
+    assert "arm" in heard[0].lower() and "water bottle" in heard[0].lower()
+
+
 def test_probe_reachable_false_for_closed_port() -> None:
     arm = HttpArmClient("http://127.0.0.1:1", timeout_s=5.0)
     assert arm.probe_reachable(timeout_s=0.3) is False
+
+
+def test_tool_http_uses_long_timeout_for_arm_paths() -> None:
+    import importlib.util
+    from pathlib import Path
+
+    helper = (
+        Path(__file__).resolve().parents[1]
+        / "medicine_buddy"
+        / "conversation"
+        / "lib"
+        / "tool_http.py"
+    )
+    spec = importlib.util.spec_from_file_location("tool_http_under_test", helper)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._timeout_for_path("/arm/move_object", None) >= 90
+    assert mod._timeout_for_path("/doses/run", None) >= 90
+    assert mod._timeout_for_path("/memories/save", None) == 25

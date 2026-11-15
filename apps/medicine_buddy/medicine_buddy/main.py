@@ -207,6 +207,13 @@ class MedicineBuddy(ReachyMiniApp):
                 speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")
                 speaker.start()
             start_wake_greeting(service, speaker, stop_event)
+        # Arm wait lines need a speaker even if reminders/check-ins/wake are off.
+        if speaker is None and (service.config.arm_url or "").strip():
+            ui_port = urlparse(self.custom_app_url).port or 7860
+            speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")
+            speaker.start()
+        if speaker is not None:
+            service.progress_speaker = speaker.speak_progress
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
         logger.info("In-app pages (open by default): http://<this-machine>:7860/medicine")
         arm_url = (service.config.arm_url or "").strip()

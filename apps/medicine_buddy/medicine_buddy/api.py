@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
+
+logger = logging.getLogger("medicine_buddy.api")
 
 from medicine_buddy import __version__
 from medicine_buddy.access import PeopleAccessMixin
@@ -96,6 +99,19 @@ class MedicineBuddyService(
         self._init_debug()
         self._init_transcript()
         self._init_listen_mode()
+        # Set from main.py to RpcSpeaker.speak_progress — live TTS while arm HTTP blocks.
+        self.progress_speaker: Callable[[str], bool] | None = None
+
+    def announce_progress(self, text: str) -> bool:
+        """Best-effort spoken line while a long arm call is in flight."""
+        line = " ".join(str(text or "").split())
+        if not line or self.progress_speaker is None:
+            return False
+        try:
+            return bool(self.progress_speaker(line))
+        except Exception as exc:  # noqa: BLE001 — never fail the arm path for TTS
+            logger.warning("announce_progress failed: %s", exc)
+            return False
 
     def family_page(self) -> str:
         return render_family_page(self.settings_token)
@@ -122,10 +138,17 @@ class MedicineBuddyService(
         self.db.close()
 
     def health(self) -> dict[str, Any]:
+        arm_url = (self.config.arm_url or "").strip()
+        arm_reachable: bool | None = None
+        if arm_url:
+            client = HttpArmClient.from_config(self.config)
+            arm_reachable = bool(client and client.probe_reachable())
         return {
             "status": "ok",
             "dry_run": self.config.dry_run,
-            "arm_url_configured": bool((self.config.arm_url or "").strip()),
+            "arm_url_configured": bool(arm_url),
+            "arm_url": arm_url or None,
+            "arm_reachable": arm_reachable,
             "encourage_self_care": self.encourage_self_care(),
             "service": "medicine-buddy",
             "version": __version__,
@@ -553,6 +576,11 @@ class MedicineBuddyService(
             if remote is not None:
                 if remote.probe_reachable():
                     arm = remote
+                    # Speak now — tool HTTP blocks until the arm finishes (up to ~90s).
+                    self.announce_progress(
+                        f"Okay — I'm asking the arm to bring your {medicine.name} now. "
+                        "One moment."
+                    )
                     # Arm does one-shot place + camera check_taken unless conversation
                     # wants a pause. With remote arm, still honour stop_after_placed.
                 else:
@@ -725,6 +753,11 @@ class MedicineBuddyService(
                 }
             try:
                 if remote is not None:
+                    # Speak before the long POST so the person isn't left in silence.
+                    self.announce_progress(
+                        f"Okay — I'm asking the arm to bring the {label} to the "
+                        f"{destination} now. One moment."
+                    )
                     result = remote.move_object(
                         label=label,
                         destination=destination,

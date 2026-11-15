@@ -69,14 +69,19 @@ class SettingsMixin:
         return bool(token) and hmac.compare_digest(str(token), self.settings_token)
 
     def require_passphrases(self) -> bool:
-        """True = passphrase + voice-guard checks are on. DB setting wins over env."""
+        """True = passphrase + voice-guard checks are on.
+
+        Explicit ``MEDICINE_BUDDY_REQUIRE_PASSPHRASES`` in the environment always wins
+        (so robot installs from laptop ``.env`` cannot be stuck ON by an old DB row).
+        Otherwise the Family-page DB setting wins; default OFF for demos.
+        """
+        env = os.environ.get("MEDICINE_BUDDY_REQUIRE_PASSPHRASES")
+        if env is not None and str(env).strip() != "":
+            return str(env).strip().lower() in {"1", "true", "yes", "on"}
         saved = self.db.get_setting(REQUIRE_PASSPHRASES_KEY)
         if saved is not None and str(saved).strip() != "":
             return str(saved).strip().lower() in {"1", "true", "yes", "on"}
-        # Default OFF for demos; set MEDICINE_BUDDY_REQUIRE_PASSPHRASES=1 to start locked down.
-        return os.environ.get("MEDICINE_BUDDY_REQUIRE_PASSPHRASES", "0").lower() in {
-            "1", "true", "yes", "on",
-        }
+        return False
 
     def sync_passphrase_guardrails(self) -> bool:
         """Apply the master switch to the voice guard. Returns the new enabled state."""

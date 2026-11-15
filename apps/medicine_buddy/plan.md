@@ -159,6 +159,14 @@ Tests: `test_caregiver_alerts.py`, `test_companion_pillars.py`
 - Stories = `memories` rows; dose timelines = `dose_events` rows (no separate history table)
 - Tests: `test_explorer_db.py`, `test_explorer_api.py` (+ extended web UI coverage)
 
+## v0.10.6 — Google is the calendar + bidirectional sync
+
+- Never ask “which calendar?” when Google is configured; voice uses that calendar only
+- `sync_google_calendar`: pull Google events → local; push unsynced local/medicine mirrors → Google
+- Background loop + Family Sync prefer Google API over ICS when configured
+- `schedule_medicine` / update / delete also push/cancel Google `Med:` events
+- Passphrases: env `MEDICINE_BUDDY_REQUIRE_PASSPHRASES` wins over stale DB; demo skips passphrase gates
+
 ## v0.10.0 — voice → Google Calendar write
 
 - ICS subscribe remains pull-only; voice `create_calendar_event` / `cancel_calendar_event` also call Google Calendar API when OAuth env + calendar id are set

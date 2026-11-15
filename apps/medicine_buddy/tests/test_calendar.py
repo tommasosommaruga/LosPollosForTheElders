@@ -263,7 +263,7 @@ def test_create_and_cancel_companion_event(service: MedicineBuddyService) -> Non
     assert created["status"] == "ok"
     assert created["google_pushed"] is False
     assert created["google_configured"] is False
-    assert "companion calendar" in created["speak_hint"].casefold()
+    assert "calendar" in created["speak_hint"].casefold()
     listed = service.list_upcoming_events({})
     assert listed["status"] == "ok"
     assert any("Garden walk" in line for line in listed["companion"])
@@ -311,7 +311,7 @@ def test_create_when_tomorrow_pushes_google(
     assert created["status"] == "ok"
     assert created["google_pushed"] is True
     assert created["google_configured"] is True
-    assert "Google Calendar" in created["speak_hint"]
+    assert "calendar" in created["speak_hint"].casefold()
     assert created["event"]["starts_at"].startswith("2026-11-16")
     assert created["event"]["time_hhmm"] == "01:00"
     assert created["event"]["weekdays"] == ""

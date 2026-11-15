@@ -286,6 +286,7 @@ class MedicineBuddyService(
                 }
             schedule = self.db.add_schedule(medicine.id, weekdays, time_hhmm)
             mirror_schedule(self.db, schedule, medicine)
+            self.push_schedule_to_google_async(schedule, medicine)
             return self._verified(medicine, schedule.id, weekdays, time_hhmm, "is set up", person)
 
     def _try_first_time_enrol(
@@ -429,6 +430,7 @@ class MedicineBuddyService(
                         "speak_hint": f"{medicine.name} is already set {_when(clash)}."}
             updated = self.db.update_schedule(target.id, weekdays=weekdays, time_hhmm=time_hhmm)
             mirror_schedule(self.db, updated, medicine)
+            self.push_schedule_to_google_async(updated, medicine)
             return self._verified(medicine, target.id, weekdays, time_hhmm, "is now set up", person)
 
     def delete_schedule(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -480,6 +482,7 @@ class MedicineBuddyService(
                                    "with confirmed=true."),
                 }
             for s in picked:
+                self.cancel_schedule_on_google_async(s.id)
                 self.db.deactivate_schedule(s.id)
                 cancel_mirror(self.db, s.id)
             # Verify by reading back

@@ -16,6 +16,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from medicine_buddy.calendar_ics import (
+    ParsedEvent,
     build_calendar,
     build_vevent,
     medicine_name_from_summary,
@@ -33,6 +34,7 @@ from medicine_buddy.google_calendar import (
     ensure_timezone_name,
     google_write_status,
     insert_google_event,
+    list_google_events_as_parsed,
     load_google_cal_config,
     next_occurrence_date,
     probe_google_calendar,
@@ -168,7 +170,11 @@ class CalendarMixin:
             cal_id = " ".join(str(body.get("google_calendar_id") or "").split())[:200]
             self.db.set_setting(SETTING_CALENDAR_ID, cal_id)
         if body.get("sync"):
-            sync = self.sync_calendar_import()
+            # Prefer Google API bidirectional sync when configured; else ICS import URL.
+            if self._google_cfg().configured:
+                sync = self.sync_google_calendar()
+            else:
+                sync = self.sync_calendar_import()
             if sync.get("error") and not sync.get("status"):
                 return sync
         probe: dict[str, Any] | None = None
@@ -321,6 +327,42 @@ class CalendarMixin:
                 logger.info("Calendar import failed: %s", msg)
                 return {"error": f"Could not fetch calendar: {msg}"}
         parsed = parse_ics(text, tz=self.tz())
+        return self._apply_parsed_calendar_items(parsed, source="import")
+
+    def sync_google_calendar(self) -> dict[str, Any]:
+        """Bidirectional sync with the connected Google calendar (API).
+
+        Pull Google → local companion / medicine proposals; push local mirrors
+        missing a Google id → Google. Uses the single configured calendar id.
+        """
+        cfg = self._google_cfg()
+        if not cfg.configured:
+            return {
+                "status": "skipped",
+                "message": "Google Calendar write is not configured.",
+            }
+        try:
+            parsed = list_google_events_as_parsed(
+                cfg, tz_name=ensure_timezone_name(self.tz()), days_ahead=90
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)[:200]
+            self.db.set_setting(LAST_SYNC_ERROR_KEY, msg)
+            logger.info("Google Calendar pull failed: %s", msg)
+            return {"error": f"Could not pull Google Calendar: {msg}"}
+        pulled = self._apply_parsed_calendar_items(parsed, source="google")
+        pushed_n = self._push_unsynced_local_to_google()
+        pulled["google_pushed_local"] = pushed_n
+        if pushed_n:
+            pulled["message"] = (
+                f"{pulled.get('message', 'Synced.')} Also pushed {pushed_n} local "
+                "event(s) to Google."
+            )
+        return pulled
+
+    def _apply_parsed_calendar_items(
+        self, parsed: list[ParsedEvent], *, source: str
+    ) -> dict[str, Any]:
         companion_n = proposal_n = updated_n = skipped = 0
         seen_companion_uids: set[str] = set()
         for item in parsed:
@@ -347,9 +389,7 @@ class CalendarMixin:
                     updated_n += 1
                     continue
                 if sync_result == "matched":
-                    # Confident match, already in sync — do not propose or recount.
                     continue
-                # No schedule, or ambiguous multi-dose: leave schedules as-is; propose.
                 self.db.upsert_calendar_event(
                     uid=item.uid,
                     kind="medicine",
@@ -361,12 +401,11 @@ class CalendarMixin:
                     all_day=False,
                     person_id=person_id,
                     medicine_name=match.name,
-                    source="import",
+                    source=source,
                     status="proposed",
                 )
                 proposal_n += 1
                 continue
-            # Companion event
             if not item.summary:
                 skipped += 1
                 continue
@@ -380,11 +419,13 @@ class CalendarMixin:
                 time_hhmm=item.time_hhmm or "",
                 starts_at=item.starts_at or "",
                 all_day=item.all_day,
-                source="import",
+                source=source,
                 status="active",
             )
             companion_n += 1
-        cancelled_n = self._cancel_missing_import_companions(seen_companion_uids)
+        cancelled_n = self._cancel_missing_import_companions(
+            seen_companion_uids, sources={source}
+        )
         now = datetime.now().astimezone().replace(microsecond=0).isoformat()
         self.db.set_setting(LAST_SYNC_KEY, now)
         self.db.set_setting(LAST_SYNC_ERROR_KEY, "")
@@ -403,17 +444,88 @@ class CalendarMixin:
             ),
         }
 
-    def _cancel_missing_import_companions(self, seen_uids: set[str]) -> int:
-        """Cancel active import companions whose UID was not in this sync feed. Never touch local."""
+    def _cancel_missing_import_companions(
+        self, seen_uids: set[str], *, sources: set[str] | None = None
+    ) -> int:
+        """Cancel active import/google companions missing from this sync. Never touch local."""
+        allowed = sources or {"import", "google"}
         cancelled = 0
         for ev in self.db.list_calendar_events(status="active", kind="companion", limit=500):
-            if ev.source != "import":
+            if ev.source not in allowed:
                 continue
             if ev.uid in seen_uids:
                 continue
             self.db.set_calendar_event_status(ev.id, "cancelled")
             cancelled += 1
         return cancelled
+
+    def _push_unsynced_local_to_google(self) -> int:
+        """Push active local companion + medicine mirrors that lack a Google event id."""
+        cfg = self._google_cfg()
+        if not cfg.configured:
+            return 0
+        n = 0
+        for ev in self.db.list_calendar_events(status="active", limit=500):
+            if ev.external_id:
+                continue
+            if ev.source not in {"local", ""} and not ev.uid.startswith("mb-med-"):
+                continue
+            if ev.kind not in {"companion", "medicine"}:
+                continue
+            try:
+                body = build_google_event_body(
+                    title=ev.title,
+                    description=ev.description,
+                    time_hhmm=ev.time_hhmm,
+                    weekdays=ev.weekdays,
+                    starts_at=ev.starts_at or self.now().date().isoformat(),
+                    all_day=bool(ev.all_day or not ev.time_hhmm),
+                    tz_name=ensure_timezone_name(self.tz()),
+                )
+                external_id = insert_google_event(cfg, body)
+                self.db.set_calendar_external_id(ev.id, external_id)
+                n += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.info("Google push of %s failed: %s", ev.uid, exc)
+        return n
+
+    def push_schedule_to_google_async(self, schedule: Schedule, medicine: Medicine) -> None:
+        """Background: ensure medicine mirror exists on Google after schedule save."""
+        if not self._google_cfg().configured:
+            return
+
+        def _work() -> None:
+            try:
+                mirror = mirror_schedule(self.db, schedule, medicine)
+                if mirror.external_id:
+                    return
+                note, ok = self._push_create_to_google(mirror)
+                if not ok:
+                    logger.info("Medicine Google push: %s", note)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("Medicine Google push crashed: %s", exc)
+
+        threading.Thread(
+            target=_work, name=f"gcal-med-{schedule.id}", daemon=True
+        ).start()
+
+    def cancel_schedule_on_google_async(self, schedule_id: int) -> None:
+        if not self._google_cfg().configured:
+            return
+        mirror = self.db.get_calendar_event_by_uid(medicine_mirror_uid(schedule_id))
+        if mirror is None or not mirror.external_id:
+            return
+        external_id = mirror.external_id
+
+        def _work() -> None:
+            try:
+                delete_google_event(self._google_cfg(), external_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("Medicine Google delete crashed: %s", exc)
+
+        threading.Thread(
+            target=_work, name=f"gcal-med-del-{schedule_id}", daemon=True
+        ).start()
 
     def _sync_medicine_against_schedule(
         self,
@@ -653,27 +765,18 @@ class CalendarMixin:
             when = "as an all-day note"
         google_note, google_ok, google_pending = self._push_create_to_google_voice(ev)
         gcfg = self._google_cfg()
-        if google_ok:
-            hint = (
-                f"I've added “{title}” to your Google Calendar "
-                f"({gcfg.calendar_id}) {when}."
-            )
-        elif google_pending:
-            hint = (
-                f"I've put “{title}” on the calendar {when}, "
-                "and I'm syncing it to Google Calendar now."
-            )
+        # Never ask "which calendar?" — the connected Google id is the only external one.
+        if google_ok or (gcfg.configured and google_pending):
+            hint = f"I've put “{title}” on your calendar {when}."
+            if google_pending:
+                hint += " Syncing to Google now."
         elif gcfg.configured:
             hint = (
-                f"I've saved “{title}” on the companion calendar {when}, "
-                f"but Google Calendar sync failed. {google_note}"
+                f"I've saved “{title}” locally {when}, "
+                f"but Google sync failed. {google_note}"
             ).strip()
         else:
-            hint = (
-                f"I've put “{title}” on the companion calendar only {when}. "
-                "Google Calendar write is not connected on this robot yet "
-                "(Family page → Calendar → Test Google after syncing .env)."
-            )
+            hint = f"I've put “{title}” on your calendar {when}."
         return {
             "status": "ok",
             "event": _event_json(self.db.get_calendar_event(ev.id) or ev),
@@ -926,10 +1029,13 @@ class CalendarSyncLoop:
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_s):
-            if not self.service.calendar_import_url():
-                continue
             try:
-                result = self.service.sync_calendar_import()
+                if self.service._google_cfg().configured:  # noqa: SLF001
+                    result = self.service.sync_google_calendar()
+                elif self.service.calendar_import_url():
+                    result = self.service.sync_calendar_import()
+                else:
+                    continue
                 logger.info("Calendar sync: %s", result.get("message") or result.get("error"))
             except Exception as exc:  # noqa: BLE001
                 logger.info("Calendar sync crashed: %s", exc)

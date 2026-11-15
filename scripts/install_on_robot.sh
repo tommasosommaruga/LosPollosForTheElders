@@ -40,6 +40,11 @@ GOOGLE_CLIENT_ID="$(_read_env_key MEDICINE_BUDDY_GOOGLE_CLIENT_ID)"
 GOOGLE_CLIENT_SECRET="$(_read_env_key MEDICINE_BUDDY_GOOGLE_CLIENT_SECRET)"
 GOOGLE_REFRESH_TOKEN="$(_read_env_key MEDICINE_BUDDY_GOOGLE_REFRESH_TOKEN)"
 GOOGLE_CALENDAR_ID="$(_read_env_key MEDICINE_BUDDY_GOOGLE_CALENDAR_ID)"
+REQUIRE_PASSPHRASES="$(_read_env_key MEDICINE_BUDDY_REQUIRE_PASSPHRASES)"
+# Default demo-open when unset in laptop .env
+if [[ -z "${REQUIRE_PASSPHRASES}" ]]; then
+  REQUIRE_PASSPHRASES="0"
+fi
 
 echo "Robot: pollen@$ROBOT  ref=$REF  arm_url=${ARM_URL:-'(none)'}"
 if [[ -n "${GOOGLE_CLIENT_ID}" && -n "${GOOGLE_REFRESH_TOKEN}" && -n "${GOOGLE_CALENDAR_ID}" ]]; then
@@ -78,6 +83,7 @@ sync_robot_env() {
     if [[ -n "${GOOGLE_CALENDAR_ID}" ]]; then
       echo "MEDICINE_BUDDY_GOOGLE_CALENDAR_ID=${GOOGLE_CALENDAR_ID}"
     fi
+    echo "MEDICINE_BUDDY_REQUIRE_PASSPHRASES=${REQUIRE_PASSPHRASES}"
   } >"$frag"
 
   if [[ ! -s "$frag" ]]; then
@@ -98,11 +104,11 @@ mkdir -p \"\$DATA_DIR\"
 umask 077
 touch \"\$ENV_FILE\"
 tmp=\"\$(mktemp)\"
-grep -vE \"^[[:space:]]*MEDICINE_BUDDY_(ARM_URL|ARM_TIMEOUT_S|DRY_RUN|ARM_MOVE_VIA|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|GOOGLE_REFRESH_TOKEN|GOOGLE_CALENDAR_ID)=\" \"\$ENV_FILE\" >\"\$tmp\" || true
+grep -vE \"^[[:space:]]*MEDICINE_BUDDY_(ARM_URL|ARM_TIMEOUT_S|DRY_RUN|ARM_MOVE_VIA|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|GOOGLE_REFRESH_TOKEN|GOOGLE_CALENDAR_ID|REQUIRE_PASSPHRASES)=\" \"\$ENV_FILE\" >\"\$tmp\" || true
 cat \"\$tmp\" /tmp/medicine_buddy_sync.env >\"\$ENV_FILE\"
 rm -f \"\$tmp\" /tmp/medicine_buddy_sync.env
 echo \"--- robot .env (synced keys, secrets redacted) ---\"
-grep -E \"^[[:space:]]*MEDICINE_BUDDY_(ARM_|DRY_RUN|GOOGLE_)\" \"\$ENV_FILE\" \\
+grep -E \"^[[:space:]]*MEDICINE_BUDDY_(ARM_|DRY_RUN|GOOGLE_|REQUIRE_PASSPHRASES)\" \"\$ENV_FILE\" \\
   | sed -E \"s/(GOOGLE_CLIENT_SECRET|GOOGLE_REFRESH_TOKEN)=.*/\\1=(set)/\" || true
 "'
   rm -f "$frag"

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,7 +19,12 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from medicine_buddy.calendar_ics import weekdays_to_byday
+from medicine_buddy.calendar_ics import (
+    ParsedEvent,
+    byday_to_weekdays,
+    medicine_name_from_summary,
+    weekdays_to_byday,
+)
 
 logger = logging.getLogger("medicine_buddy.google_calendar")
 
@@ -171,6 +177,97 @@ def probe_google_calendar(cfg: GoogleCalConfig) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.info("Google Calendar probe failed: %s", exc)
         return {"ok": False, "error": str(exc)[:240], "calendar_id": cfg.calendar_id}
+
+
+def list_google_events_as_parsed(
+    cfg: GoogleCalConfig,
+    *,
+    tz_name: str,
+    days_ahead: int = 60,
+    max_results: int = 250,
+) -> list[ParsedEvent]:
+    """Pull upcoming (+ recurring master) events into ParsedEvent for local sync."""
+    if not cfg.configured:
+        return []
+    token = _access_token(cfg)
+    cal = urllib.parse.quote(cfg.calendar_id, safe="")
+    now = datetime.now().astimezone()
+    time_min = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    time_max = (now + timedelta(days=max(1, days_ahead))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = urllib.parse.urlencode(
+        {
+            "maxResults": str(max(1, min(max_results, 2500))),
+            "singleEvents": "false",
+            "timeMin": time_min,
+            "timeMax": time_max,
+            "orderBy": "updated",
+        }
+    )
+    url = f"{CAL_API}/calendars/{cal}/events?{query}"
+    raw = _http_json("GET", url, None, token=token)
+    zone = ZoneInfo(tz_name) if tz_name else None
+    out: list[ParsedEvent] = []
+    for item in raw.get("items") or []:
+        parsed = _google_item_to_parsed(item, zone)
+        if parsed is not None:
+            out.append(parsed)
+    return out
+
+
+def _google_item_to_parsed(item: dict[str, Any], tz: ZoneInfo | None) -> ParsedEvent | None:
+    status = str(item.get("status") or "").lower()
+    if status == "cancelled":
+        return None
+    gid = str(item.get("id") or "").strip()
+    if not gid:
+        return None
+    summary = str(item.get("summary") or "").strip() or "(untitled)"
+    description = str(item.get("description") or "").strip()
+    start = item.get("start") or {}
+    end = item.get("end") or {}
+    del end  # unused; duration not stored locally
+    all_day = "date" in start and "dateTime" not in start
+    time_hhmm: str | None = None
+    starts_at: str | None = None
+    if all_day:
+        starts_at = str(start.get("date") or "")[:10] or None
+    else:
+        raw_dt = str(start.get("dateTime") or "")
+        if not raw_dt:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+            if tz is not None:
+                dt = dt.astimezone(tz)
+            time_hhmm = f"{dt.hour:02d}:{dt.minute:02d}"
+            starts_at = dt.replace(tzinfo=None).isoformat(timespec="seconds")
+        except ValueError:
+            return None
+    weekdays: str | None = None
+    recurrence = item.get("recurrence") or []
+    for line in recurrence:
+        text = str(line)
+        if "BYDAY=" in text.upper():
+            m = re.search(r"BYDAY=([^;]+)", text, re.IGNORECASE)
+            if m:
+                weekdays = byday_to_weekdays(m.group(1))
+        elif "FREQ=DAILY" in text.upper():
+            weekdays = "*"
+    if weekdays is None and time_hhmm and starts_at and not all_day:
+        try:
+            weekdays = str(datetime.fromisoformat(starts_at).weekday())
+        except ValueError:
+            weekdays = None
+    return ParsedEvent(
+        uid=f"gcal-{gid}@google",
+        summary=summary,
+        description=description,
+        time_hhmm=time_hhmm,
+        weekdays=weekdays,
+        starts_at=starts_at,
+        all_day=all_day,
+        medicine_hint=medicine_name_from_summary(summary),
+    )
 
 
 def _rrule_for_weekdays(weekdays: str) -> str | None:

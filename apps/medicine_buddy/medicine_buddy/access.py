@@ -22,8 +22,12 @@ Passphrases are never stored in clear, never returned, and never stored in memor
 from __future__ import annotations
 
 import difflib
+import logging
 import re
+import secrets
 from typing import Any, Callable
+
+logger = logging.getLogger("medicine_buddy.access")
 
 from medicine_buddy.auth import (
     make_secret,
@@ -67,6 +71,9 @@ class PeopleAccessMixin:
                 return None, None  # no family members yet: unassigned, as before
             if allow_default and len(patients) == 1:
                 return patients[0], None
+            # Demo mode: do not block the whole turn asking "who?" — use the first patient.
+            if allow_default and not self.require_passphrases() and patients:
+                return patients[0], None
             names = ", ".join(p.name for p in people)
             return None, {"error": "person is required",
                           "speak_hint": f"Who is this for? I know: {names}."}
@@ -91,6 +98,21 @@ class PeopleAccessMixin:
             return None, {"error": f"unknown person: {text!r}", "known_people": [p.name for p in people],
                           "speak_hint": f"I don't know anyone called {text}. I know: {names}."}
         name = text.title() if text.islower() else text
+        # Demo mode: never force spoken-passphrase enrolment mid-schedule.
+        if not self.require_passphrases():
+            try:
+                created = self.db.add_person(name, "person", make_secret(secrets.token_urlsafe(12)))
+                logger.info("Demo mode auto-registered person %r (no passphrase prompt)", name)
+                return created, None
+            except Exception as exc:  # noqa: BLE001 — unique name race / validation
+                existing = self.db.get_person_by_name(name)
+                if existing:
+                    return existing, None
+                logger.info("Demo auto-register failed for %r: %s", name, exc)
+                return None, {
+                    "error": f"could not register {name!r}",
+                    "speak_hint": f"I couldn't add {name} just now. Try again, or pick someone I know.",
+                }
         return None, self._needs_passphrase_setup(name)
 
     @staticmethod

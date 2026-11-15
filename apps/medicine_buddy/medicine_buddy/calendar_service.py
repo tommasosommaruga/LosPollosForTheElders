@@ -23,9 +23,10 @@ from medicine_buddy.calendar_ics import (
     new_uid,
     parse_ics,
 )
+from medicine_buddy.calendar_mirror import backfill_medicine_mirrors, medicine_mirror_uid, mirror_schedule
 from medicine_buddy.companion_settings import validate_http_url
-from medicine_buddy.db import CalendarEvent
-from medicine_buddy.scheduler import find_upcoming_doses
+from medicine_buddy.db import CalendarEvent, Medicine, Schedule
+from medicine_buddy.relative_time import TimeWindow, parse_window
 from medicine_buddy.voice_setup import describe_time, describe_weekdays, parse_time_hhmm, parse_weekdays
 
 logger = logging.getLogger("medicine_buddy.calendar")
@@ -63,6 +64,7 @@ class CalendarMixin:
     def _init_calendar(self) -> None:
         if not self.calendar_export_token():
             self.db.set_setting(EXPORT_TOKEN_KEY, secrets.token_urlsafe(18))
+        backfill_medicine_mirrors(self.db)
 
     def calendar_export_token(self) -> str:
         return (self.db.get_setting(EXPORT_TOKEN_KEY) or "").strip()
@@ -182,23 +184,15 @@ class CalendarMixin:
             medicine = self.db.add_medicine(matched.name, person.id if person else None)
             existing = self.db.find_active_schedule(medicine.id, weekdays, ev.time_hhmm)
             if existing is None:
-                self.db.add_schedule(medicine.id, weekdays, ev.time_hhmm)
-            self.db.set_calendar_event_status(event_id, "active")
-            # Keep proposal row as medicine/active for history, or clear — mark active but unused.
-            self.db.upsert_calendar_event(
-                uid=ev.uid,
-                kind="medicine",
-                title=medicine_summary(matched.name),
-                description=ev.description,
-                weekdays=weekdays,
-                time_hhmm=ev.time_hhmm,
-                starts_at=ev.starts_at,
-                all_day=False,
-                person_id=person.id if person else None,
-                medicine_name=matched.name,
-                source=ev.source,
-                status="active",
-            )
+                schedule = self.db.add_schedule(medicine.id, weekdays, ev.time_hhmm)
+            else:
+                schedule = existing
+            # Stable mirror uid; supersede the ICS-import proposal row so we do not keep two.
+            mirror_schedule(self.db, schedule, medicine)
+            if ev.uid != medicine_mirror_uid(schedule.id):
+                self.db.set_calendar_event_status(event_id, "cancelled")
+            else:
+                self.db.set_calendar_event_status(event_id, "active")
         when = f"{describe_weekdays(weekdays)} at {describe_time(ev.time_hhmm)}"
         return {
             "status": "ok",
@@ -219,7 +213,7 @@ class CalendarMixin:
         return {"status": "ok", "message": f"Rejected “{ev.title}”."}
 
     def sync_calendar_import(self, *, ics_text: str | None = None) -> dict[str, Any]:
-        """Fetch (or parse) ICS; companion events upsert; medicine → proposals only."""
+        """Fetch (or parse) ICS; companion upsert; medicine proposals or schedule updates."""
         text = ics_text
         url = self.calendar_import_url()
         if text is None:
@@ -233,7 +227,8 @@ class CalendarMixin:
                 logger.info("Calendar import failed: %s", msg)
                 return {"error": f"Could not fetch calendar: {msg}"}
         parsed = parse_ics(text, tz=self.tz())
-        companion_n = proposal_n = skipped = 0
+        companion_n = proposal_n = updated_n = skipped = 0
+        seen_companion_uids: set[str] = set()
         for item in parsed:
             if item.medicine_hint or self._looks_like_medicine(item.summary):
                 hint = item.medicine_hint or item.summary
@@ -241,20 +236,31 @@ class CalendarMixin:
                 if match.name is None or not item.time_hhmm:
                     skipped += 1
                     continue
+                weekdays = item.weekdays or "*"
                 existing = self.db.get_calendar_event_by_uid(item.uid)
-                if existing and existing.status in {"active", "rejected"}:
-                    # Already accepted into schedules or dismissed.
+                if existing and existing.status == "rejected":
                     skipped += 1
+                    continue
+                person_id = existing.person_id if existing else None
+                if self._sync_medicine_against_schedule(
+                    match_name=match.name,
+                    weekdays=weekdays,
+                    time_hhmm=item.time_hhmm,
+                    person_id=person_id,
+                    uid=item.uid,
+                ):
+                    updated_n += 1
                     continue
                 self.db.upsert_calendar_event(
                     uid=item.uid,
                     kind="medicine",
                     title=medicine_summary(match.name),
                     description=item.description,
-                    weekdays=item.weekdays or "*",
+                    weekdays=weekdays,
                     time_hhmm=item.time_hhmm,
                     starts_at=item.starts_at or "",
                     all_day=False,
+                    person_id=person_id,
                     medicine_name=match.name,
                     source="import",
                     status="proposed",
@@ -265,6 +271,7 @@ class CalendarMixin:
             if not item.summary:
                 skipped += 1
                 continue
+            seen_companion_uids.add(item.uid)
             self.db.upsert_calendar_event(
                 uid=item.uid,
                 kind="companion",
@@ -278,6 +285,7 @@ class CalendarMixin:
                 status="active",
             )
             companion_n += 1
+        cancelled_n = self._cancel_missing_import_companions(seen_companion_uids)
         now = datetime.now().astimezone().replace(microsecond=0).isoformat()
         self.db.set_setting(LAST_SYNC_KEY, now)
         self.db.set_setting(LAST_SYNC_ERROR_KEY, "")
@@ -285,36 +293,163 @@ class CalendarMixin:
             "status": "ok",
             "companion_upserted": companion_n,
             "proposals": proposal_n,
+            "schedules_updated": updated_n,
+            "companions_cancelled": cancelled_n,
             "skipped": skipped,
             "message": (
                 f"Synced: {companion_n} companion event(s), {proposal_n} medicine proposal(s)"
+                + (f", {updated_n} schedule update(s)" if updated_n else "")
+                + (f", {cancelled_n} companion(s) cancelled" if cancelled_n else "")
                 + (f", {skipped} skipped." if skipped else ".")
             ),
         }
+
+    def _cancel_missing_import_companions(self, seen_uids: set[str]) -> int:
+        """Cancel active import companions whose UID was not in this sync feed. Never touch local."""
+        cancelled = 0
+        for ev in self.db.list_calendar_events(status="active", kind="companion", limit=500):
+            if ev.source != "import":
+                continue
+            if ev.uid in seen_uids:
+                continue
+            self.db.set_calendar_event_status(ev.id, "cancelled")
+            cancelled += 1
+        return cancelled
+
+    def _sync_medicine_against_schedule(
+        self,
+        *,
+        match_name: str,
+        weekdays: str,
+        time_hhmm: str,
+        person_id: int | None,
+        uid: str,
+    ) -> bool:
+        """If an active schedule exists for this medicine(+person), update/remirror when ICS changed.
+
+        Returns True when an active schedule was found (updated or already matching).
+        """
+        medicine = self._find_catalog_medicine(match_name, person_id)
+        if medicine is None:
+            return False
+        schedules = self.db.list_schedules_for_medicine(medicine.id)
+        if not schedules:
+            return False
+        schedule = self._pick_schedule_for_import(schedules, uid=uid, weekdays=weekdays, time_hhmm=time_hhmm)
+        if schedule.weekdays != weekdays or schedule.time_hhmm != time_hhmm:
+            schedule = self.db.update_schedule(schedule.id, weekdays=weekdays, time_hhmm=time_hhmm)
+        # Mirror is the stable mb-med-* row; do not reactivate the ICS-import proposal uid.
+        mirror_schedule(self.db, schedule, medicine)
+        return True
+
+    def _find_catalog_medicine(self, name: str, person_id: int | None) -> Medicine | None:
+        med = self.db.get_medicine_by_name(name, person_id)
+        if med is not None:
+            return med
+        if person_id is not None:
+            return self.db.get_medicine_by_name(name, None)
+        # No person on the import row: any active medicine with this name (prefer unassigned).
+        for candidate in self.db.list_medicines():
+            if candidate.name.casefold() == name.casefold():
+                return candidate
+        return None
+
+    def _pick_schedule_for_import(
+        self,
+        schedules: list[Schedule],
+        *,
+        uid: str,
+        weekdays: str,
+        time_hhmm: str,
+    ) -> Schedule:
+        """Prefer exact weekdays/time match, else prior ICS-linked times, else first active."""
+        for schedule in schedules:
+            if schedule.weekdays == weekdays and schedule.time_hhmm == time_hhmm:
+                return schedule
+        prior = self.db.get_calendar_event_by_uid(uid)
+        if prior is not None and prior.time_hhmm:
+            for schedule in schedules:
+                if schedule.time_hhmm == prior.time_hhmm and (
+                    not prior.weekdays or schedule.weekdays == prior.weekdays
+                ):
+                    return schedule
+        return schedules[0]
 
     def _looks_like_medicine(self, summary: str) -> bool:
         match = self.catalog.match(summary or "")
         return match.name is not None and match.how in {"exact", "alias", "fuzzy"}
 
     def list_upcoming_events(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Voice/tool: medicines due soon + companion events."""
-        del body  # reserved for filters later
-        upcoming_meds = find_upcoming_doses(self.db, tz=self.tz())
-        companion = self._upcoming_companion_summaries(limit=10)
-        lines: list[str] = []
-        for d in upcoming_meds:
-            lines.append(f"Medicine: {d.medicine_name} at {describe_time(d.time_hhmm)}")
+        """Voice/tool: medicines + companion events whose local occurrences fall in ``when``."""
+        body = body or {}
+        when_raw = str(body.get("when") or "soon").strip() or "soon"
+        now = self.now()
+        try:
+            window = _resolve_list_window(when_raw, now)
+        except ValueError as exc:
+            return {"error": str(exc), "speak_hint": str(exc)}
+
+        medicines: list[dict[str, Any]] = []
+        for schedule in self.db.list_active_schedules():
+            med = self.db.get_medicine(schedule.medicine_id)
+            if med is None:
+                continue
+            occs = _occurrences_in_window(
+                weekdays=schedule.weekdays,
+                time_hhmm=schedule.time_hhmm,
+                window_start=window.start,
+                window_end=window.end,
+            )
+            if not occs:
+                continue
+            medicines.append(
+                {
+                    "name": med.name,
+                    "time_hhmm": schedule.time_hhmm,
+                    "schedule_id": schedule.id,
+                    "at": occs[0].isoformat(timespec="seconds"),
+                }
+            )
+        medicines.sort(key=lambda m: m["at"])
+
+        companion_sort: list[tuple[datetime, str]] = []
+        for ev in self.db.list_calendar_events(status="active", kind="companion", limit=100):
+            occs = _occurrences_in_window(
+                weekdays=ev.weekdays,
+                time_hhmm=ev.time_hhmm,
+                starts_at=ev.starts_at,
+                window_start=window.start,
+                window_end=window.end,
+                all_day=bool(ev.all_day or not ev.time_hhmm),
+            )
+            if not occs:
+                continue
+            label = (
+                f"{ev.title} at {describe_time(ev.time_hhmm)}"
+                if ev.time_hhmm
+                else ev.title
+            )
+            companion_sort.append((occs[0], label))
+        companion_sort.sort(key=lambda pair: pair[0])
+        companion = [label for _, label in companion_sort]
+
+        lines: list[str] = [
+            f"Medicine: {m['name']} at {describe_time(m['time_hhmm'])}" for m in medicines
+        ]
         lines.extend(companion)
         if not lines:
-            hint = "Nothing special coming up soon. You can add a medicine reminder or a calendar event."
+            hint = (
+                f"Nothing special coming up {window.label}. "
+                "You can add a medicine reminder or a calendar event."
+            )
         else:
             hint = "Coming up: " + "; ".join(lines) + "."
         return {
             "status": "ok",
-            "medicines": [
-                {"name": d.medicine_name, "time_hhmm": d.time_hhmm, "schedule_id": d.schedule_id}
-                for d in upcoming_meds
-            ],
+            "when": window.label,
+            "window_start": window.start.isoformat(timespec="seconds"),
+            "window_end": window.end.isoformat(timespec="seconds"),
+            "medicines": medicines,
             "companion": companion,
             "speak_hint": hint,
         }
@@ -338,7 +473,9 @@ class CalendarMixin:
         weekdays_raw = str(body.get("weekdays") or body.get("days") or "daily").strip()
         try:
             time_hhmm = parse_time_hhmm(time_raw) if time_raw else ""
-            weekdays = parse_weekdays(weekdays_raw) if time_hhmm else ""
+            weekdays = (
+                parse_weekdays(weekdays_raw, as_of=self.now().date()) if time_hhmm else ""
+            )
         except ValueError as exc:
             return {"error": str(exc), "speak_hint": f"I didn't understand the time or day. {exc}."}
         person = None
@@ -440,6 +577,72 @@ def _starts_date(starts_at: str) -> date | None:
         return date.fromisoformat(starts_at[:10])
     except ValueError:
         return None
+
+
+def _resolve_list_window(when: str, now: datetime) -> TimeWindow:
+    """Map ``when`` to a half-open window. ``soon`` / empty → [now, end_of_tomorrow)."""
+    key = " ".join((when or "").strip().casefold().split())
+    # parse_window rejects soon/empty — special-case the default list horizon here.
+    if not key or key == "soon":
+        # End of tomorrow = midnight at the start of the day after tomorrow.
+        day_after_tomorrow = now.date() + timedelta(days=2)
+        end_of_tomorrow = datetime(
+            day_after_tomorrow.year,
+            day_after_tomorrow.month,
+            day_after_tomorrow.day,
+            tzinfo=now.tzinfo,
+        )
+        return TimeWindow(start=now, end=end_of_tomorrow, label="soon")
+    return parse_window(when, now)
+
+
+def _day_matches_recurrence(d: date, weekdays: str, starts_at: str) -> bool:
+    """Whether local calendar day ``d`` is an occurrence day for weekdays/starts_at."""
+    wd = (weekdays or "").strip()
+    starts = _starts_date(starts_at)
+    if wd == "*":
+        return starts is None or d >= starts
+    if wd:
+        allowed = {int(p) for p in wd.split(",") if p.strip() != ""}
+        if d.weekday() not in allowed:
+            return False
+        return starts is None or d >= starts
+    return starts is not None and d == starts
+
+
+def _occurrences_in_window(
+    *,
+    weekdays: str,
+    time_hhmm: str,
+    window_start: datetime,
+    window_end: datetime,
+    starts_at: str = "",
+    all_day: bool = False,
+) -> list[datetime]:
+    """Local wall-clock occurrences that fall in half-open [window_start, window_end)."""
+    if window_start.tzinfo is None or window_end.tzinfo is None:
+        raise ValueError("window bounds must be timezone-aware")
+    if window_end <= window_start:
+        return []
+
+    if all_day or not (time_hhmm or "").strip():
+        hour, minute = 0, 0
+    else:
+        try:
+            hour, minute = (int(x) for x in time_hhmm.split(":"))
+        except ValueError:
+            return []
+
+    out: list[datetime] = []
+    last_day = (window_end - timedelta(microseconds=1)).date()
+    d = window_start.date()
+    while d <= last_day:
+        if _day_matches_recurrence(d, weekdays, starts_at):
+            occ = datetime(d.year, d.month, d.day, hour, minute, tzinfo=window_start.tzinfo)
+            if window_start <= occ < window_end:
+                out.append(occ)
+        d += timedelta(days=1)
+    return out
 
 
 class CalendarSyncLoop:

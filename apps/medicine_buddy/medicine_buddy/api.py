@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from medicine_buddy import __version__
 from medicine_buddy.access import PeopleAccessMixin
 from medicine_buddy.activities import ActivitiesMixin
+from medicine_buddy.calendar_mirror import cancel_mirror, mirror_schedule
 from medicine_buddy.calendar_service import CalendarMixin
 from medicine_buddy.caregiver_alerts import CaregiverAlertsMixin
 from medicine_buddy.checkins import CheckInsMixin
@@ -232,7 +233,7 @@ class MedicineBuddyService(
         if not time_raw:
             return {"error": "time is required", "speak_hint": f"What time should I remind you about {name}?"}
         try:
-            weekdays = parse_weekdays(weekdays_raw)
+            weekdays = parse_weekdays(weekdays_raw, as_of=self.now().date())
             time_hhmm = parse_time_hhmm(time_raw)
         except ValueError as exc:
             return {"error": str(exc), "speak_hint": f"Sorry, I didn't understand that time or day. {exc}."}
@@ -282,6 +283,7 @@ class MedicineBuddyService(
                                    "so nothing changed."),
                 }
             schedule = self.db.add_schedule(medicine.id, weekdays, time_hhmm)
+            mirror_schedule(self.db, schedule, medicine)
             return self._verified(medicine, schedule.id, weekdays, time_hhmm, "is set up", person)
 
     def _try_first_time_enrol(
@@ -384,7 +386,11 @@ class MedicineBuddyService(
                     "speak_hint": "What should I change it to - a new time, or different days?"}
         try:
             new_time = parse_time_hhmm(str(new_time_raw)) if new_time_raw else None
-            new_weekdays = parse_weekdays(str(new_weekdays_raw)) if new_weekdays_raw else None
+            new_weekdays = (
+                parse_weekdays(str(new_weekdays_raw), as_of=self.now().date())
+                if new_weekdays_raw
+                else None
+            )
         except ValueError as exc:
             return {"error": str(exc), "speak_hint": f"Sorry, I didn't understand that. {exc}."}
         name, err = self._recognize(body.get("name"))
@@ -419,7 +425,8 @@ class MedicineBuddyService(
             if clash is not None and clash.id != target.id:
                 return {"error": "that schedule already exists",
                         "speak_hint": f"{medicine.name} is already set {_when(clash)}."}
-            self.db.update_schedule(target.id, weekdays=weekdays, time_hhmm=time_hhmm)
+            updated = self.db.update_schedule(target.id, weekdays=weekdays, time_hhmm=time_hhmm)
+            mirror_schedule(self.db, updated, medicine)
             return self._verified(medicine, target.id, weekdays, time_hhmm, "is now set up", person)
 
     def delete_schedule(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -472,6 +479,7 @@ class MedicineBuddyService(
                 }
             for s in picked:
                 self.db.deactivate_schedule(s.id)
+                cancel_mirror(self.db, s.id)
             # Verify by reading back
             still_active = {s.id for s in self.db.list_schedules_for_medicine(medicine.id)}
             if any(s.id in still_active for s in picked):
@@ -824,6 +832,7 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/calendar/upcoming": service.list_upcoming_events,
         "/calendar/create": service.create_calendar_event,
         "/calendar/cancel": service.cancel_calendar_event,
+        "/clock/now": service.clock_now,
     }
     # Typed on the Family settings page only: never reachable by an AI tool.
     settings_routes = {

@@ -75,7 +75,8 @@ ACTIVITY_CATALOG: list[dict[str, str]] = [
         "kind": "social",
         "title": "Call family",
         "prompt": (
-            "Ask whether they would like to call family. If yes, use start_family_call. "
+            "Ask whether they would like to phone family. Video call in Buddy is coming soon; "
+            "if they want video, use start_family_call (it will say to use their phone/tablet). "
             "Do not invent a video link."
         ),
     },

@@ -22,6 +22,7 @@ _FILLER = {
     "capsule", "capsules", "medicine", "medicines", "medication", "meds", "dose",
 }
 FUZZY_CUTOFF = 0.8
+FUZZY_MARGIN = 0.08  # top score must beat second by this much to pick a clear winner
 MAX_SPOKEN_NAMES = 30  # above this the "medicines I know" hint is not read out
 
 
@@ -63,14 +64,30 @@ class MedicineCatalog:
             return MatchResult(name, [name], how)
 
         close = difflib.get_close_matches(key, self._lookup, n=5, cutoff=FUZZY_CUTOFF)
-        candidates = list(dict.fromkeys(self._lookup[c][0] for c in close))
-        if len(candidates) == 1:
-            return MatchResult(candidates[0], candidates, "fuzzy")
-        if len(candidates) > 1:
-            return MatchResult(None, candidates, "ambiguous")
-        # Nothing close: offer looser suggestions so Reachy can ask "did you mean...?"
-        loose = difflib.get_close_matches(key, self._lookup, n=3, cutoff=0.5)
-        return MatchResult(None, list(dict.fromkeys(self._lookup[c][0] for c in loose)), "unknown")
+        if not close:
+            # Nothing close: offer looser suggestions so Reachy can ask "did you mean...?"
+            loose = difflib.get_close_matches(key, self._lookup, n=3, cutoff=0.5)
+            return MatchResult(
+                None, list(dict.fromkeys(self._lookup[c][0] for c in loose)), "unknown"
+            )
+
+        # Best ratio per canonical name among close keys (aliases can share a name).
+        best_by_name: dict[str, float] = {}
+        for close_key in close:
+            name = self._lookup[close_key][0]
+            score = difflib.SequenceMatcher(None, key, close_key).ratio()
+            if score > best_by_name.get(name, 0.0):
+                best_by_name[name] = score
+
+        ranked = sorted(best_by_name.items(), key=lambda item: item[1], reverse=True)
+        candidates = [name for name, _ in ranked]
+        if len(ranked) == 1:
+            return MatchResult(ranked[0][0], candidates, "fuzzy")
+        top_name, top_score = ranked[0]
+        second_score = ranked[1][1]
+        if top_score - second_score >= FUZZY_MARGIN:
+            return MatchResult(top_name, candidates, "fuzzy")
+        return MatchResult(None, candidates, "ambiguous")
 
     def find_in_text(self, sentence: str) -> set[str]:
         """Catalog medicines mentioned anywhere in a sentence ('add my asprin at nine' -> {'Aspirin'})."""

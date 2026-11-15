@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from medicine_buddy.voice_setup import (
@@ -12,6 +14,16 @@ from medicine_buddy.voice_setup import (
 
 def test_parse_weekdays_daily() -> None:
     assert parse_weekdays("daily") == "*"
+
+
+def test_tomorrow_is_weekday_code() -> None:
+    # Sunday 2026-11-15 → tomorrow = Monday = 0 (Mon=0 … Sun=6)
+    assert parse_weekdays("tomorrow", as_of=date(2026, 11, 15)) == "0"
+
+
+def test_today_is_weekday_code() -> None:
+    # Sunday 2026-11-15 → today = Sunday = 6
+    assert parse_weekdays("today", as_of=date(2026, 11, 15)) == "6"
 
 
 def test_parse_weekdays_list() -> None:
@@ -65,6 +77,7 @@ def test_parse_time_invalid(raw: str) -> None:
 def test_describe_for_speech() -> None:
     assert describe_weekdays("*") == "every day"
     assert describe_weekdays("0,1,2,3,4") == "on weekdays"
+    assert describe_weekdays("0") == "every Monday"
     assert describe_weekdays("0,4") == "on Monday and Friday"
     assert describe_weekdays("0,2,4") == "on Monday, Wednesday and Friday"
     assert describe_time("09:00") == "9 AM"

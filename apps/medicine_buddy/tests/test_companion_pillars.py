@@ -39,23 +39,19 @@ def svc(tmp_path: Path):
     s.close()
 
 
-def test_family_call_needs_setup_then_ok(svc: MedicineBuddyService) -> None:
-    missing = svc.start_family_call({})
-    assert missing["status"] == "needs_setup"
-    assert "Family settings" in missing["speak_hint"]
+def test_family_call_is_coming_soon_mock(svc: MedicineBuddyService) -> None:
+    settings = svc.settings_family_call({"url": "https://meet.google.com/abc-defg-hij"})
+    assert settings["status"] == "ok"
+    assert settings["coming_soon"] is True
+    assert settings["configured"] is False
+    assert settings["url"] == ""
+    assert "coming soon" in settings["message"].lower()
 
-    bad = svc.settings_family_call({"url": "not-a-url"})
-    assert "error" in bad
-
-    saved = svc.settings_family_call({
-        "url": "https://meet.google.com/abc-defg-hij",
-        "label": "Call the children",
-    })
-    assert saved["configured"] is True
-    ready = svc.start_family_call({})
-    assert ready["status"] == "ok"
-    assert ready["url"].startswith("https://meet.google.com/")
-    assert "Call the children" in ready["speak_hint"] or "meet.google.com" in ready["speak_hint"]
+    voice = svc.start_family_call({})
+    assert voice["status"] == "coming_soon"
+    assert voice["configured"] is False
+    assert "coming soon" in voice["speak_hint"].lower()
+    assert "phone" in voice["speak_hint"].lower() or "tablet" in voice["speak_hint"].lower()
 
 
 def test_quiet_hours_overnight() -> None:

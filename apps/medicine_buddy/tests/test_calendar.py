@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -15,10 +17,15 @@ from medicine_buddy.calendar_ics import (
     parse_ics,
     weekdays_to_byday,
 )
+from medicine_buddy.calendar_mirror import medicine_mirror_uid
 from medicine_buddy.catalog import MedicineCatalog
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database
 from medicine_buddy.voice_guard import VoiceGuard
+
+ZURICH = ZoneInfo("Europe/Zurich")
+# Sunday evening — tomorrow is Monday.
+SUN_EVENING = datetime(2026, 11, 15, 20, 0, tzinfo=ZURICH)
 
 
 @pytest.fixture
@@ -125,6 +132,94 @@ def test_import_medicine_becomes_proposal_until_accepted(service: MedicineBuddyS
     assert schedules[0].time_hhmm == "08:30"
     med = service.db.get_medicine(schedules[0].medicine_id)
     assert med is not None and med.name == "Aspirin"
+    # Accept must leave a medicine mirror under the stable mb-med-* uid.
+    mirror = service.db.get_calendar_event_by_uid(medicine_mirror_uid(schedules[0].id))
+    assert mirror is not None
+    assert mirror.kind == "medicine" and mirror.status == "active"
+    assert mirror.medicine_name == "Aspirin"
+    assert mirror.time_hhmm == "08:30"
+
+
+def test_import_companion_missing_from_feed_is_cancelled(service: MedicineBuddyService) -> None:
+    """Active source=import companions not in the latest feed become cancelled; local stays."""
+    first = build_calendar([
+        build_vevent(
+            uid="imp-comp@x",
+            summary="Lunch with Nonna",
+            time_hhmm="12:00",
+            weekdays="0",
+        ),
+        build_vevent(
+            uid="imp-keep@x",
+            summary="Physio",
+            time_hhmm="14:00",
+            weekdays="1",
+        ),
+    ])
+    service.sync_calendar_import(ics_text=first)
+    service.db.upsert_calendar_event(
+        uid="local-garden@medicine-buddy",
+        kind="companion",
+        title="Garden walk",
+        time_hhmm="10:00",
+        weekdays="*",
+        source="local",
+        status="active",
+    )
+    second = build_calendar([
+        build_vevent(
+            uid="imp-keep@x",
+            summary="Physio",
+            time_hhmm="14:00",
+            weekdays="1",
+        ),
+    ])
+    result = service.sync_calendar_import(ics_text=second)
+    assert result["status"] == "ok"
+    cancelled = service.db.get_calendar_event_by_uid("imp-comp@x")
+    assert cancelled is not None and cancelled.status == "cancelled"
+    kept = service.db.get_calendar_event_by_uid("imp-keep@x")
+    assert kept is not None and kept.status == "active"
+    local = service.db.get_calendar_event_by_uid("local-garden@medicine-buddy")
+    assert local is not None and local.status == "active"
+
+
+def test_resync_updates_accepted_medicine_schedule_time(service: MedicineBuddyService) -> None:
+    """After accept, ICS time/weekday changes update the linked schedule and remirror."""
+    first = build_calendar([
+        build_vevent(
+            uid="imp-med@x",
+            summary="Med: Aspirin",
+            time_hhmm="08:30",
+            weekdays="*",
+        ),
+    ])
+    service.sync_calendar_import(ics_text=first)
+    proposal = service.db.list_calendar_events(status="proposed", kind="medicine")[0]
+    assert service.accept_calendar_proposal({"id": proposal.id})["status"] == "ok"
+    before = service.db.list_active_schedules()
+    assert len(before) == 1 and before[0].time_hhmm == "08:30"
+
+    second = build_calendar([
+        build_vevent(
+            uid="imp-med@x",
+            summary="Med: Aspirin",
+            time_hhmm="09:15",
+            weekdays="0,2,4",
+        ),
+    ])
+    result = service.sync_calendar_import(ics_text=second)
+    assert result["status"] == "ok"
+    # No new proposal when an active schedule already exists for that medicine.
+    assert service.db.list_calendar_events(status="proposed", kind="medicine") == []
+    schedules = service.db.list_active_schedules()
+    assert len(schedules) == 1
+    assert schedules[0].time_hhmm == "09:15"
+    assert schedules[0].weekdays == "0,2,4"
+    mirror = service.db.get_calendar_event_by_uid(medicine_mirror_uid(schedules[0].id))
+    assert mirror is not None
+    assert mirror.time_hhmm == "09:15"
+    assert mirror.weekdays == "0,2,4"
 
 
 def test_create_and_cancel_companion_event(service: MedicineBuddyService) -> None:
@@ -142,6 +237,55 @@ def test_create_and_cancel_companion_event(service: MedicineBuddyService) -> Non
     done = service.cancel_calendar_event({"title": "Garden walk", "confirmed": True})
     assert done["status"] == "ok"
     assert service.db.list_calendar_events(status="active", kind="companion") == []
+
+
+def test_list_upcoming_when_tomorrow_includes_monday_med(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sun evening + when=tomorrow → Monday 09:00 schedule is in the window."""
+    service.db.set_setting("timezone", "Europe/Zurich")
+    monkeypatch.setattr(service, "now", lambda: SUN_EVENING)
+    med = service.db.add_medicine("Aspirin")
+    service.db.add_schedule(med.id, "0", "09:00")  # Monday
+    listed = service.list_upcoming_events({"when": "tomorrow"})
+    assert listed["status"] == "ok"
+    names = [m["name"] for m in listed["medicines"]]
+    assert "Aspirin" in names
+    assert "Aspirin" in listed["speak_hint"]
+
+
+def test_list_upcoming_empty_window_honest(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.db.set_setting("timezone", "Europe/Zurich")
+    monkeypatch.setattr(service, "now", lambda: SUN_EVENING)
+    med = service.db.add_medicine("Aspirin")
+    service.db.add_schedule(med.id, "0", "09:00")  # Monday only
+    # Yesterday has no Monday occurrence
+    listed = service.list_upcoming_events({"when": "yesterday"})
+    assert listed["status"] == "ok"
+    assert listed["medicines"] == []
+    assert listed["companion"] == []
+    assert "nothing" in listed["speak_hint"].casefold() or "no" in listed["speak_hint"].casefold()
+
+
+def test_list_upcoming_companion_in_when_window(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.db.set_setting("timezone", "Europe/Zurich")
+    monkeypatch.setattr(service, "now", lambda: SUN_EVENING)
+    service.db.upsert_calendar_event(
+        uid="walk@local",
+        kind="companion",
+        title="Garden walk",
+        time_hhmm="10:00",
+        weekdays="0",  # Monday
+        starts_at="2026-11-16",
+    )
+    listed = service.list_upcoming_events({"when": "tomorrow"})
+    assert any("Garden walk" in line for line in listed["companion"])
+    empty = service.list_upcoming_events({"when": "yesterday"})
+    assert empty["companion"] == []
 
 
 def test_create_rejects_medicine_titles(service: MedicineBuddyService) -> None:

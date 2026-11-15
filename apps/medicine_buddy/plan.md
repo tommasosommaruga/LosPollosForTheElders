@@ -63,6 +63,11 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Profile: freer emotions (`play_emotion`, `dance`, `move_head`, `sweep_look`, …); package version bumped (health uses `__version__`)
 - Tests: `test_listen_mode.py`, passphrase master-switch coverage in `test_family_settings.py`
 
+## v0.8.12 — family video call → coming soon mock (done)
+
+- Removed working call-link save / Open call / URL bridge behaviour
+- Family page shows disabled mock panel; voice `start_family_call` says use phone/tablet
+
 ## v0.8.8 — back button only (done)
 
 - Restored **← Medicine Buddy** on Pollen `/` and sticky **← Dashboard** nav (no wake-robot)
@@ -104,7 +109,7 @@ Maps geriatric needs onto the app, most effective first:
 1. **Caregiver alerts** — Missed doses POST to `MEDICINE_BUDDY_ALERT_URL` / Family page URL (ntfy or webhook); test button; activity log
 2. **Adaptive assist** — `encourage_self_care` (default on): dispense hints + profile prefer self-serve before arm
 3. **Companion check-ins** — idle `CheckInLoop` with quiet hours / interval; logged as activity
-4. **Family video bridge** — `family_call_url` + Family "Open call" + `start_family_call` tool (no WebRTC)
+4. **Family video bridge** — coming-soon mock on Family page; `start_family_call` tells them to use phone/tablet (no live URL bridge yet)
 5. **Activity prompts** — `suggest_activity` catalog (motor / cognitive / social) + optional nudges in check-ins
 6. Docs: README north star / roadmap, this plan, house-help build order
 

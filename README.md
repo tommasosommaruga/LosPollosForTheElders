@@ -23,7 +23,7 @@ Help an older person live safer and more independently at home, aligned with thr
 
 1. **Chronic care continuity (medicines)** — know *what* to take and *when*; remind gently; bring the correct closed box only when needed; check they took it; **alert caregivers on Missed**.
 2. **Motor autonomy** — encourage self-care and light movement first; arm assist for fetch/bring when the person cannot safely reach (see [`house-help-ideas.md`](house-help-ideas.md); arm team owns hardware motion).
-3. **Cognitive / emotional + caregiver support** — companion chat, consented family memories, wellbeing check-ins, optional activity prompts, and a **family video-call link** for remote relatives.
+3. **Cognitive / emotional + caregiver support** — companion chat, consented family memories, wellbeing check-ins, optional activity prompts; **family video call** is a coming-soon mock-up (use phone/tablet for now).
 
 **Adaptive rule:** assist only where the person cannot manage physically or cognitively; otherwise stimulate activity and conversation so independence does not atrophy.
 
@@ -387,7 +387,7 @@ See [`DEMO_CHECKLIST.md`](DEMO_CHECKLIST.md) and [`AGENTS.md`](AGENTS.md).
 | Caregiver alert on Missed | Yes (ntfy / webhook) | SMS / email gateways |
 | Adaptive self-care first | Yes | Graded independence profiles |
 | Companion check-ins + memories | Yes | Language practice / games |
-| Family video-call link | Yes (URL bridge) | Embedded WebRTC |
+| Family video-call link | Coming soon (UI mock) | Embedded WebRTC |
 | Soft motor / cognitive prompts | Yes (voice) | Arm rehab reps (arm team) |
 | OCR + waypoints → bowl | Arm team | VLA / Dream-1 fallback |
 | Open packaging | No | Maybe supervised |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 
 from medicine_buddy.db import Database, Medicine, Schedule
 from medicine_buddy.ports import BuddyPort
@@ -28,8 +29,14 @@ WEEKDAY_NAMES = {
 DAY_SPOKEN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
-def parse_weekdays(raw: str) -> str:
-    """'daily' / 'weekdays' / 'Mon, Wed' / 'monday and friday' / 'mondays' -> '*' or '0,2'."""
+def parse_weekdays(raw: str, as_of: date | None = None) -> str:
+    """'daily' / 'weekdays' / 'today' / 'tomorrow' / 'Mon, Wed' / names -> '*' or '0,2'.
+
+    ``today`` / ``tomorrow`` become the weekday digit for that calendar day (Mon=0…Sun=6),
+    so “tomorrow at 9” stores a recurring schedule for that weekday. ``as_of`` defaults to
+    ``date.today()``; callers with a Family TZ clock should pass ``service.now().date()``.
+    """
+    ref = as_of if as_of is not None else date.today()
     text = raw.strip().lower()
     text = re.sub(r"\bevery\s+", "", text).strip()
     if text in {"daily", "day", "every day", "everyday", "each day", "*", ""}:
@@ -40,6 +47,10 @@ def parse_weekdays(raw: str) -> str:
         return "0,1,2,3,4"
     if text in {"weekends", "weekend"}:
         return "5,6"
+    if text == "today":
+        return str(ref.weekday())
+    if text == "tomorrow":
+        return str((ref + timedelta(days=1)).weekday())
     parts = [p for p in re.split(r"[,;/&]|\band\b|\s+", text) if p.strip()]
     if not parts:
         raise ValueError("No weekdays provided")
@@ -82,7 +93,7 @@ def parse_time_hhmm(raw: str) -> str:
 
 
 def describe_weekdays(weekdays: str) -> str:
-    """Stored weekdays -> words Reachy can say: 'every day', 'on weekdays', 'on Monday and Friday'."""
+    """Stored weekdays -> words Reachy can say: 'every day', 'every Monday', 'on weekdays'."""
     if weekdays.strip() == "*":
         return "every day"
     codes = [int(c) for c in weekdays.split(",") if c.strip()]
@@ -91,7 +102,9 @@ def describe_weekdays(weekdays: str) -> str:
     if codes == [5, 6]:
         return "on weekends"
     names = [DAY_SPOKEN[c] for c in codes]
-    return "on " + (names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1])
+    if len(names) == 1:
+        return f"every {names[0]}"
+    return "on " + ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def describe_time(time_hhmm: str) -> str:

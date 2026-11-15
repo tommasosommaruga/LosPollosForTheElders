@@ -120,18 +120,16 @@ fingerprint. This page works only on this computer.
   <div class="msg" id="alert-msg"></div>
 </section>
 
-<section class="panel" id="callpanel">
-  <h2>Family video call</h2>
-  <p class="hint" id="call-status">Loading&hellip;</p>
-  <p class="hint">Paste a Meet, FaceTime, WhatsApp or Zoom link. Reachy can offer to call family;
-  you open the link here on this computer (no video is embedded in the robot).</p>
+<section class="panel" id="callpanel" style="opacity:0.85">
+  <h2>Family video call <span class="hint" style="font-weight:600">(coming soon)</span></h2>
+  <p class="hint">Preview only — video calling is not wired up yet. Use a phone or tablet to call family for now.</p>
   <div class="step" style="margin-top:10px"><label for="call-label">Label</label>
-    <input id="call-label" autocomplete="off" placeholder="e.g. Call the children"></div>
+    <input id="call-label" disabled autocomplete="off" placeholder="e.g. Call the children" value="Call the children"></div>
   <div class="step"><label for="call-url">Call link</label>
-    <div class="row"><input id="call-url" autocomplete="off" placeholder="https://meet.google.com/..." style="flex:1;min-width:200px">
-    <button type="button" id="call-save">Save</button>
-    <button class="primary" type="button" id="call-open">Open call</button></div></div>
-  <div class="msg" id="call-msg"></div>
+    <div class="row"><input id="call-url" disabled autocomplete="off" placeholder="https://meet.google.com/…" style="flex:1;min-width:200px">
+    <button type="button" id="call-save" disabled title="Coming soon">Save</button>
+    <button class="primary" type="button" id="call-open" disabled title="Coming soon">Open call</button></div></div>
+  <p class="hint" id="call-status" style="margin-top:10px">Coming soon — this mock-up shows where the family call link will live.</p>
 </section>
 
 <section class="panel" id="companionpanel">
@@ -413,34 +411,6 @@ $("alert-on").addEventListener("click", () => saveAlerts({enabled: true}));
 $("alert-off").addEventListener("click", () => saveAlerts({enabled: false}));
 $("alert-test").addEventListener("click", () => saveAlerts({test: true}));
 
-function showCall(r) {
-  $("call-status").textContent = r.message || "";
-  $("call-url").value = r.url || "";
-  $("call-label").value = r.label || "";
-  $("call-open").disabled = !r.url;
-}
-
-async function loadCall() {
-  const r = await api("/settings/family_call", {});
-  if (r.status === "ok") showCall(r);
-  else $("call-status").textContent = r.error || "Could not read call settings.";
-}
-
-async function saveCall() {
-  clearMsg($("call-msg"));
-  const r = await api("/settings/family_call", {url: $("call-url").value.trim(), label: $("call-label").value.trim()});
-  if (r.status === "ok") { showCall(r); msg($("call-msg"), r.message || "Saved.", true); }
-  else msg($("call-msg"), r.error || "Could not save.", false);
-}
-
-$("call-save").addEventListener("click", saveCall);
-$("call-open").addEventListener("click", () => {
-  const url = $("call-url").value.trim();
-  if (!url) { msg($("call-msg"), "Save a call link first.", false); return; }
-  window.open(url, "_blank", "noopener");
-  msg($("call-msg"), "Opening the family call in a new tab.", true);
-});
-
 function showCompanion(selfR, checkR, nudgeR) {
   if (selfR && selfR.status === "ok") $("self-status").textContent = selfR.message;
   if (checkR && checkR.status === "ok") {
@@ -586,7 +556,6 @@ loadPeople();
 loadGuard();
 loadTz();
 loadAlerts();
-loadCall();
 loadCompanion();
 loadCalendar();
 </script></body></html>"""

@@ -209,9 +209,34 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMi
         except ValueError as exc:
             return {"error": str(exc), "speak_hint": f"Sorry, I didn't understand that time or day. {exc}."}
         person, err = self._resolve_person(body.get("person"), for_change=True)
+        just_enrolled = False
+        if err and err.get("status") == "needs_passphrase_setup":
+            # First-time medicine setup: register with new_passphrase (if they already said it
+            # twice), then continue into scheduling — one conversational flow instead of two
+            # failed tool calls.
+            pending = {
+                "action": "schedule_medicine",
+                "name": name,
+                "weekdays": weekdays_raw,
+                "time": time_raw,
+                "person": err.get("person") or body.get("person"),
+            }
+            enrolled = self._try_first_time_enrol(body, err, pending=pending)
+            if enrolled is not None:
+                return enrolled
+            just_enrolled = True
+            person, err = self._resolve_person(body.get("person"), for_change=True)
         if err:
             return err
-        blocked = self._require_owner("add schedule", body, person) or self.guard.require_mention("add schedule", name)
+        # Just enrolled with new_passphrase: that is the proof for this request (with the guard
+        # on they already said it twice; with the guard off they typed it twice).
+        auth_body = body
+        if just_enrolled and body.get("new_passphrase"):
+            auth_body = {**body, "passphrase": body["new_passphrase"]}
+        blocked = (
+            None if just_enrolled and self.guard.enabled
+            else self._require_owner("add schedule", auth_body, person)
+        ) or self.guard.require_mention("add schedule", name)
         if blocked:
             return blocked
 
@@ -230,6 +255,41 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMi
                 }
             schedule = self.db.add_schedule(medicine.id, weekdays, time_hhmm)
             return self._verified(medicine, schedule.id, weekdays, time_hhmm, "is set up", person)
+
+    def _try_first_time_enrol(
+        self, body: dict[str, Any], setup_err: dict[str, Any], *, pending: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """If the caller provided a new passphrase for an unknown person, register them now.
+
+        Returns a response dict when enrolment was attempted (success path returns None so the
+        caller can continue scheduling; failure returns the guided error). Returns a special
+        needs_passphrase_setup dict when no passphrase was provided yet.
+        """
+        # Only `new_passphrase` enrols someone. Never treat `passphrase` (often the caregiver's)
+        # as the new person's secret — that caused confusing "already in use" / failed setup.
+        new_phrase = str(body.get("new_passphrase") or "").strip()
+        person_name = str(setup_err.get("person") or body.get("person") or "").strip()
+        if not new_phrase:
+            return self._needs_passphrase_setup(person_name or "this person", pending=pending)
+        reg = self.register_person({
+            "name": person_name,
+            "role": "person",
+            "passphrase": new_phrase,
+            "passphrase_repeat": str(body.get("passphrase_repeat") or new_phrase),
+        })
+        if reg.get("status") == "ok":
+            return None  # registered — caller re-resolves and schedules
+        # Keep the pending medicine request in the error so Reachy can retry after they speak.
+        out = dict(reg)
+        out.setdefault("status", "needs_passphrase_setup")
+        out["pending"] = pending
+        out["person"] = person_name
+        if not out.get("speak_hint"):
+            out["speak_hint"] = (
+                f"I couldn't finish setting up {person_name} yet. Please have them say their "
+                "new passphrase two times, then try the medicine reminder again."
+            )
+        return out
 
     def _verified(
         self, medicine: Medicine, schedule_id: int, weekdays: str, time_hhmm: str, verb: str,

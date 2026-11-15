@@ -33,7 +33,6 @@ from typing import Any, Callable
 from medicine_buddy.auth import (
     make_secret,
     normalize_phrase,
-    phrase_in_text,
     secret_in_text,
     validate_new_passphrase,
 )
@@ -94,14 +93,32 @@ class PeopleAccessMixin:
             return None, {"error": f"unknown person: {text!r}", "known_people": [p.name for p in people],
                           "speak_hint": f"I don't know anyone called {text}. I know: {names}."}
         name = text.title() if text.islower() else text
-        return None, {
+        return None, self._needs_passphrase_setup(name)
+
+    @staticmethod
+    def _needs_passphrase_setup(name: str, *, pending: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Clear first-time setup instructions for Reachy to read aloud and follow."""
+        out: dict[str, Any] = {
             "error": f"{name} has no passphrase yet",
             "status": "needs_passphrase_setup",
             "person": name,
-            "speak_hint": (f"{name} doesn't have a passphrase yet, and I need one to keep {name}'s "
-                           "medicines and memories safe. Please choose a passphrase of three or four easy "
-                           "words and say it twice. Then call register_person, and try again."),
+            "next_step": "ask_passphrase_twice_then_retry",
+            "steps": [
+                f"Ask {name} to invent a passphrase of three or four easy words.",
+                f"Ask {name} to say those words out loud.",
+                "Ask them to say the same words one more time.",
+                "Call schedule_medicine again with new_passphrase set to those words "
+                "(or call register_person, then retry the medicine request).",
+            ],
+            "speak_hint": (
+                f"{name} is not set up yet. To keep {name}'s medicines safe I need a passphrase. "
+                f"{name}, please choose three or four easy words, say them now, then say them "
+                "one more time. When you've said them twice, I'll finish setting things up."
+            ),
         }
+        if pending:
+            out["pending"] = pending
+        return out
 
     def _require_auth(
         self, action: str, body: dict[str, Any], allowed: Callable[[Person], bool], who: str
@@ -172,15 +189,26 @@ class PeopleAccessMixin:
             return {"error": problem, "speak_hint": f"Please choose another passphrase: {problem}."}
 
         # The passphrase must be given TWICE so a typo or mishearing can't lock someone out.
+        # With the voice guard ON, only REAL speech counts (tool args alone never unlock).
+        # Saying it twice in one sentence also counts — STT often merges short repeats.
         if typed:
             if normalize_phrase(phrase) != normalize_phrase(repeat):
-                return {"error": "the two passphrases are different"}
+                return {"error": "the two passphrases are different",
+                        "speak_hint": "The two typed passphrases didn't match. Please type the same words twice."}
         elif self.guard.enabled:
-            if not self.guard.wait_times_said(lambda t: phrase_in_text(phrase, t), 2):
-                return self.guard.refuse(
-                    "register person", "new passphrase not heard twice",
-                    "Please say the new passphrase two times, so I'm sure I heard it right.")
-        elif normalize_phrase(phrase) != normalize_phrase(repeat):
+            if not self.guard.wait_phrase_said(phrase, 2):
+                return {
+                    **self.guard.refuse(
+                        "register person",
+                        "new passphrase not heard twice",
+                        f"I still need to hear {name}'s new passphrase two times in their own voice. "
+                        "Please say the three or four words now, then say them again.",
+                    ),
+                    "status": "needs_passphrase_repeat",
+                    "next_step": "ask_them_to_say_passphrase_twice",
+                    "person": name,
+                }
+        elif normalize_phrase(phrase) != normalize_phrase(repeat or ""):
             return {"error": "the two passphrases are different",
                     "speak_hint": "The two passphrases didn't match. Let's try again: say it twice."}
 

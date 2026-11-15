@@ -29,14 +29,25 @@ class ScheduleMedicine(Tool):
         "Only medicines on the allowed list are accepted; pass the name as the person said it and the "
         "server recognizes it (or returns suggestions to ask about). "
         "weekdays: 'daily', 'weekdays', 'weekends' or names like 'Mon,Wed,Fri'. time: '09:00' or '9 AM'. "
-        "Always read the returned speak_hint aloud: it confirms the reminder was set up correctly. "
+        "FIRST-TIME SETUP: if the person is not registered yet, the tool returns needs_passphrase_setup. "
+        "Ask them to choose 3–4 easy words and SAY THEM TWICE out loud, then call this tool again with "
+        "new_passphrase set to those words (do not invent a passphrase; only use words they said). "
+        "That registers them and saves the reminder in one step. "
+        "Always read the returned speak_hint aloud. "
         "To change or remove an existing reminder use update_medicine_schedule / delete_medicine_schedule."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
             "person": {"type": "string", "description": "Whose medicines (the person's name). Omit only if there is just one person."},
-            "passphrase": {"type": "string", "description": "The passphrase of the person whose list it is (or the caregiver's), as just said. Only needed if the voice guard is off. Never repeat it aloud."},
+            "passphrase": {"type": "string", "description": "Existing passphrase (only if voice guard is off). Never invent one. Never repeat it aloud."},
+            "new_passphrase": {
+                "type": "string",
+                "description": (
+                    "ONLY for first-time setup of a new person: the 3–4 words they just said twice. "
+                    "Never invent this. Omit once they are already registered."
+                ),
+            },
             "name": {"type": "string", "description": "Medicine name, e.g. Aspirin"},
             "weekdays": {"type": "string", "description": "daily or weekday list"},
             "time": {"type": "string", "description": "Local time HH:MM"},
@@ -46,16 +57,15 @@ class ScheduleMedicine(Tool):
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         del deps
-        payload = _api_request(
-            "POST",
-            "/schedules",
-            {
-                "person": kwargs.get("person"),
-                "passphrase": kwargs.get("passphrase"),
-                "name": kwargs.get("name"),
-                "weekdays": kwargs.get("weekdays", "daily"),
-                "time": kwargs.get("time"),
-            },
-        )
-        logger.info("schedule_medicine → %s", payload)
+        body = {
+            "person": kwargs.get("person"),
+            "passphrase": kwargs.get("passphrase"),
+            "name": kwargs.get("name"),
+            "weekdays": kwargs.get("weekdays", "daily"),
+            "time": kwargs.get("time"),
+        }
+        if kwargs.get("new_passphrase"):
+            body["new_passphrase"] = kwargs["new_passphrase"]
+        payload = _api_request("POST", "/schedules", body)
+        logger.info("schedule_medicine → %s", {k: v for k, v in payload.items() if k != "pending"})
         return payload

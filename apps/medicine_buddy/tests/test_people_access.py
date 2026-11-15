@@ -13,6 +13,7 @@ from medicine_buddy.auth import (
     make_secret,
     normalize_phrase,
     phrase_in_text,
+    phrase_occurrences,
     secret_in_text,
     validate_new_passphrase,
 )
@@ -32,6 +33,8 @@ def test_normalize_and_find_in_speech() -> None:
     assert normalize_phrase("  Purple, Mountain-SUNRISE! ") == "purple mountain sunrise"
     assert phrase_in_text(CARE, "ok my passphrase is purple mountain sunrise, thanks")
     assert not phrase_in_text(CARE, "purple mountain")
+    assert phrase_occurrences(CARE, f"{CARE} then {CARE}") == 2
+    assert phrase_occurrences(CARE, CARE) == 1
     s = make_secret(CARE)
     assert secret_in_text(s, "it's Purple mountain sunrise.")
     assert not secret_in_text(s, "purple sunrise mountain")
@@ -87,14 +90,16 @@ def test_unknown_person_is_asked_to_set_up_a_passphrase_first(svc: MedicineBuddy
     _family(svc)
     r = svc.add_schedule({"person": "luca", "name": "Aspirin", "weekdays": "daily", "time": "09:00", "passphrase": CARE})
     assert r["status"] == "needs_passphrase_setup" and r["person"] == "Luca"
-    assert "say it twice" in r["speak_hint"]
+    assert "steps" in r and r.get("pending", {}).get("action") == "schedule_medicine"
+    assert "passphrase" in r["speak_hint"].lower()
+    # Caregiver passphrase must NOT enrol Luca by accident
     assert svc.db.get_person_by_name("Luca") is None and svc.db.list_active_schedules() == []
-    # ...Luca sets it up, then the same request works with Luca's own passphrase
-    assert svc.register_person({"name": "Luca", "role": "person", "passphrase": "green kite river",
-                                "passphrase_repeat": "green kite river"})["status"] == "ok"
-    r = svc.add_schedule({"person": "Luca", "name": "Aspirin", "weekdays": "daily", "time": "09:00",
-                          "passphrase": "green kite river"})
-    assert r["verified"]
+    # One-shot setup: new_passphrase + medicine details
+    r = svc.add_schedule({
+        "person": "Luca", "name": "Aspirin", "weekdays": "daily", "time": "09:00",
+        "new_passphrase": "green kite river", "passphrase_repeat": "green kite river",
+    })
+    assert r["verified"] and svc.db.get_person_by_name("Luca") is not None
 
 
 def test_similar_names_never_mix_up_timetables(svc: MedicineBuddyService) -> None:
@@ -278,6 +283,29 @@ def test_registration_needs_passphrase_said_twice(gsvc: MedicineBuddyService, cl
     assert gsvc.register_person(reg)["blocked"] is True       # only said once, args don't count
     _say(gsvc, clock, CARE)
     assert gsvc.register_person(reg)["status"] == "ok"
+
+
+def test_registration_accepts_passphrase_twice_in_one_utterance(
+    gsvc: MedicineBuddyService, clock: Clock,
+) -> None:
+    reg = {"name": "Anna", "role": "caregiver", "passphrase": CARE, "passphrase_repeat": CARE}
+    _say(gsvc, clock, f"{CARE} {CARE}")
+    assert gsvc.register_person(reg)["status"] == "ok"
+
+
+def test_schedule_new_passphrase_after_said_twice(gsvc: MedicineBuddyService, clock: Clock) -> None:
+    """First-time medicine setup: say passphrase twice, then schedule_medicine with new_passphrase."""
+    _say(gsvc, clock, "please add aspirin for Mario at nine")
+    r = gsvc.add_schedule({"person": "Mario", "name": "Aspirin", "weekdays": "daily", "time": "09:00"})
+    assert r["status"] == "needs_passphrase_setup"
+    _say(gsvc, clock, f"my passphrase is {MARIO}")
+    _say(gsvc, clock, MARIO)
+    r = gsvc.add_schedule({
+        "person": "Mario", "name": "Aspirin", "weekdays": "daily", "time": "09:00",
+        "new_passphrase": MARIO,
+    })
+    assert r.get("verified") is True
+    assert gsvc.db.get_person_by_name("Mario") is not None
 
 
 def test_spoken_passphrase_unlocks_for_five_minutes(gsvc: MedicineBuddyService, clock: Clock) -> None:

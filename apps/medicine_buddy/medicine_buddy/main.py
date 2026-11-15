@@ -76,6 +76,7 @@ from medicine_buddy.config import AppConfig  # noqa: E402
 from medicine_buddy.db import default_db_path  # noqa: E402
 from medicine_buddy.reminders import ReminderLoop  # noqa: E402
 from medicine_buddy.speaker import RpcSpeaker  # noqa: E402
+from medicine_buddy.wake import start_wake_greeting  # noqa: E402
 from medicine_buddy.web_ui import attach_web_ui  # noqa: E402
 
 _SERVICE: MedicineBuddyService | None = None
@@ -133,6 +134,7 @@ class MedicineBuddy(ReachyMiniApp):
         _SERVICE = service
         _install_transcript_hook()
         reminders = None
+        speaker = None
         if os.environ.get("MEDICINE_BUDDY_REMINDERS", "1").lower() not in {"0", "false", "no", "off"}:
             ui_port = urlparse(self.custom_app_url).port or 7860
             speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")   # waits until Reachy is idle
@@ -140,16 +142,30 @@ class MedicineBuddy(ReachyMiniApp):
             reminders = ReminderLoop(service, speaker)
             service.reminder_loop = reminders   # shown on the debug page
             reminders.start()
+        # Wake line + "what's due in the next 30 min" once speech is ready (same speaker as reminders).
+        wake_on = os.environ.get("MEDICINE_BUDDY_WAKE_GREETING", "1").lower() not in {
+            "0", "false", "no", "off",
+        }
+        if wake_on:
+            if speaker is None:
+                ui_port = urlparse(self.custom_app_url).port or 7860
+                speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")
+                speaker.start()
+            start_wake_greeting(service, speaker, stop_event)
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
         logger.info("In-app pages (sign in with the caregiver passphrase): http://<this-machine>:7860/medicine")
-        logger.info("Database: %s  |  voice guard: %s  |  profile: %s (locked)", db_path, guard, PROFILE)
+        logger.info(
+            "Database: %s  |  voice guard: %s  |  wake greeting: %s  |  profile: %s (locked)",
+            db_path, guard, wake_on, PROFILE,
+        )
         try:
             self._run_conversation(reachy_mini, stop_event)
         finally:
             _SERVICE = None
             if reminders is not None:
                 reminders.stop()
-                reminders.speak.stop()
+            if speaker is not None:
+                speaker.stop()
             server.shutdown()
             server.server_close()
             service.close()

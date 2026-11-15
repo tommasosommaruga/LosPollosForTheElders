@@ -76,10 +76,29 @@ def word_windows(text: str, size: int) -> list[str]:
 
 
 def phrase_in_text(phrase: str, text: str) -> bool:
-    norm = normalize_phrase(phrase)
-    if not norm:
-        return False
-    return norm in word_windows(text, len(norm.split()))
+    return phrase_occurrences(phrase, text) > 0
+
+
+def phrase_occurrences(phrase: str, text: str) -> int:
+    """How many non-overlapping times `phrase` appears as contiguous words in `text`.
+
+    Saying the passphrase twice in one breath ("blue sky lake blue sky lake") counts as 2,
+    which makes first-time voice setup less brittle when speech-to-text merges utterances.
+    """
+    target = normalize_phrase(phrase).split()
+    words = normalize_phrase(text).split()
+    n = len(target)
+    if n == 0 or len(words) < n:
+        return 0
+    count = 0
+    i = 0
+    while i + n <= len(words):
+        if words[i : i + n] == target:
+            count += 1
+            i += n
+        else:
+            i += 1
+    return count
 
 
 def secret_in_text(secret: StoredSecret, text: str) -> bool:

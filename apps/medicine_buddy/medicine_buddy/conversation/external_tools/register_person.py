@@ -25,13 +25,11 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
 class RegisterPerson(Tool):
     name = "register_person"
     description = (
-        "First-time passphrase setup for a person, so their medicine timetable and memories are kept "
-        "separately and protected. Use it when another tool returns status 'needs_passphrase_setup', or "
-        "when someone asks to be set up. Ask the person to choose a passphrase of three or four easy words "
-        "and to SAY IT TWICE; pass both. role 'person' (a family member) needs nothing else. role "
-        "'caregiver' (can manage everyone) needs an existing caregiver's passphrase if one exists. "
-        "Never repeat a passphrase aloud. To CHANGE a passphrase, tell them to use the Family settings "
-        "page on the computer - it can't be done by voice."
+        "Register someone with a passphrase when they only want an account (no medicine yet). "
+        "For medicine setup prefer schedule_medicine with new_passphrase after they say 3–4 words twice. "
+        "With the voice guard, only real speech counts — tool args alone are not enough. "
+        "role 'person' needs nothing else; role 'caregiver' needs an existing caregiver's passphrase "
+        "if one exists. Never invent or repeat a passphrase aloud. To CHANGE one, use Family settings."
     )
     parameters_schema = {
         "type": "object",

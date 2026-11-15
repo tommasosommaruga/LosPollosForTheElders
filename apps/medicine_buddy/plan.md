@@ -56,6 +56,17 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Names (`names.py`): one canonical key (case, accents, NFC/NFD, spacing) - "Nicolo" / "NICOLO" / "Nicolo" can no longer be two people; unique index + safe migration of existing databases (nothing deleted; duplicates flagged in the log); titles ("grandpa", "nonna") are stripped; a longer name such as "Mario Bianchi" is no longer silently treated as "Mario"; nameless registrations are rejected instead of crashing
 - Robot CPU: passphrase spotting is lazy + cached (newest sentence first, stops early, never on the audio path): ~2 ms per sentence instead of ~530 ms on a laptop (the robot's CPU is several times slower); dashboard/debug use COUNT queries and limits
 
+## v0.6.2 — easier first-time passphrase + medicine setup (done)
+
+- `schedule_medicine` can enrol a new person with `new_passphrase` after they say it twice, then save the reminder in one flow
+- Clearer `needs_passphrase_setup` / `needs_passphrase_repeat` with steps + speak_hint; caregiver `passphrase` never misused as the new secret
+- Saying the passphrase twice in one utterance counts; profile/tool copy updated
+
+## v0.6.1 — wake greeting (done)
+
+- On app start, once Reachy can speak: a short cool wake line, then which medicines are due in the next 30 minutes (from real schedules). Retries until the conversation session is ready; off via `MEDICINE_BUDDY_WAKE_GREETING=0`.
+- Tests: `test_wake.py`
+
 ## v0.6 — activity + history explorer (done)
 
 - Persist privacy-safe `activity_events` in SQLite (dual-write from `record_request`; RAM deque kept for debug snapshot; prune by age/row cap)

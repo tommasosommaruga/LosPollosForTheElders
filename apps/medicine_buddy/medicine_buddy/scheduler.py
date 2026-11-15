@@ -23,6 +23,21 @@ class DueDose:
     time_hhmm: str
 
 
+@dataclass(frozen=True)
+class UpcomingDose:
+    """A schedule whose time is still ahead, within the wake-greeting window."""
+
+    medicine_id: int
+    schedule_id: int
+    medicine_name: str
+    time_hhmm: str
+    person_name: str | None = None
+
+
+# How far ahead the wake greeting looks for "coming up soon".
+UPCOMING_WITHIN = timedelta(minutes=30)
+
+
 def _weekday_matches(schedule: Schedule, when: datetime) -> bool:
     if schedule.weekdays.strip() == "*":
         return True
@@ -82,3 +97,44 @@ def find_due_doses(db: Database, when: datetime | None = None, tz: tzinfo | None
             )
         )
     return due
+
+
+def find_upcoming_doses(
+    db: Database,
+    when: datetime | None = None,
+    *,
+    within: timedelta = UPCOMING_WITHIN,
+    tz: tzinfo | None = None,
+) -> list[UpcomingDose]:
+    """Active schedules whose time is strictly after `when` and within `within`.
+
+    Used for the wake greeting ("what's coming in the next half hour"). Already
+    taken/skipped doses for that slot are omitted. Results are sorted by time.
+    """
+    now = _as_now(when, tz)
+    horizon = now + within
+    upcoming: list[UpcomingDose] = []
+    for schedule in db.list_active_schedules():
+        hour, minute = (int(x) for x in schedule.time_hhmm.split(":"))
+        scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if not (now < scheduled <= horizon):
+            continue
+        if not _weekday_matches(schedule, scheduled):
+            continue
+        if _already_handled(db, schedule.medicine_id, scheduled - DUE_BEFORE):
+            continue
+        medicine = db.get_medicine(schedule.medicine_id)
+        if medicine is None:
+            continue
+        person = db.get_person(medicine.person_id) if medicine.person_id else None
+        upcoming.append(
+            UpcomingDose(
+                medicine_id=medicine.id,
+                schedule_id=schedule.id,
+                medicine_name=medicine.name,
+                time_hhmm=schedule.time_hhmm,
+                person_name=person.name if person else None,
+            )
+        )
+    upcoming.sort(key=lambda d: d.time_hhmm)
+    return upcoming

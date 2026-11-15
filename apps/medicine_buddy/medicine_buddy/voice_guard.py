@@ -24,6 +24,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from medicine_buddy.auth import phrase_occurrences
 from medicine_buddy.catalog import MedicineCatalog
 
 MENTION_WINDOW = 180.0
@@ -132,6 +133,19 @@ class VoiceGuard:
 
     def wait_times_said(self, matcher: Callable[[str], bool], count: int) -> bool:
         return self._wait_for(lambda: self.times_said(matcher) >= count)
+
+    def phrase_times_said(self, phrase: str, window: float = MENTION_WINDOW) -> int:
+        """Total non-overlapping times `phrase` appears in recent speech (across utterances)."""
+        now = self.clock()
+        return sum(
+            phrase_occurrences(phrase, u.text)
+            for u in list(self._heard)
+            if u.text and now - u.at <= window
+        )
+
+    def wait_phrase_said(self, phrase: str, count: int) -> bool:
+        """Wait until the passphrase was heard `count` times in real speech (not tool args)."""
+        return self._wait_for(lambda: self.phrase_times_said(phrase) >= count)
 
     def refuse(self, action: str, reason: str, speak: str) -> dict[str, Any]:
         return self._refuse(action, reason, speak)

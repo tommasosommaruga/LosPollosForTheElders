@@ -1,0 +1,232 @@
+<!doctype html>
+<!--
+  Medicine Buddy demo video — title cards, labels and name tags.
+  One template renders every graphic: graphics.html?id=<id>&fmt=16x9|9x16
+  render.py screenshots each id with headless Edge/Chrome into ../out/.
+  Edit the GRAPHICS list below to change wording, then re-run render.py.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Video Graphics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;1,8..60,400&display=block" rel="stylesheet">
+<style>
+  :root {
+    --cream: #F0EEE6;
+    --ink: #191919;
+    --muted: #6B6A64;
+    --clay: #C96442;
+    --pill: rgba(240, 238, 230, 0.94);
+    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --sans: "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+    /* 16:9 defaults (1920x1080); 9:16 overrides below */
+    --title: 76px;
+    --title-brand: 112px;
+    --sub: 32px;
+    --label: 30px;
+    --name: 44px;
+    --role: 24px;
+    --edge-x: 112px;
+    --edge-b: 104px;
+    --measure: 1300px;
+  }
+  .v {
+    --title: 84px;
+    --title-brand: 120px;
+    --sub: 36px;
+    --label: 38px;
+    --name: 54px;
+    --role: 30px;
+    --edge-x: 80px;
+    --edge-b: 420px; /* clear of platform UI on vertical video */
+    --measure: 880px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body { font-family: var(--sans); color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+  /* ---------- full-screen cards ---------- */
+  .card {
+    position: absolute; inset: 0; background: var(--cream);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 0 var(--edge-x);
+  }
+  .card h1 {
+    font-family: var(--serif); font-weight: 400; font-size: var(--title);
+    line-height: 1.18; letter-spacing: -0.012em; max-width: var(--measure);
+    text-wrap: balance;
+  }
+  .card .brand { font-size: var(--title-brand); letter-spacing: -0.02em; }
+  .card .dot {
+    width: 14px; height: 14px; border-radius: 50%; background: var(--clay);
+    margin-bottom: 44px;
+  }
+  .card p.sub {
+    font-family: var(--serif); font-style: italic; font-size: var(--sub);
+    color: var(--muted); margin-top: 28px; max-width: var(--measure); text-wrap: balance;
+  }
+  .card .lines { display: flex; flex-direction: column; gap: 22px; }
+  .card .lines h1 { font-size: calc(var(--title) * 0.82); }
+  .card .lines .ghost { visibility: hidden; } /* keeps layout fixed between build steps */
+  .card .credit {
+    position: absolute; left: 0; right: 0; bottom: calc(var(--edge-b) * 0.7);
+    padding: 0 var(--edge-x); text-wrap: balance; line-height: 1.6;
+    font-size: calc(var(--role) * 0.9); color: var(--muted); letter-spacing: 0.01em;
+  }
+  .card .credit b { display: block; font-weight: 500; color: var(--ink); margin-bottom: 4px; }
+  .card .credit.ghost { visibility: hidden; }
+
+  /* ---------- overlays (transparent background) ---------- */
+  .overlay { position: absolute; left: var(--edge-x); bottom: var(--edge-b); }
+  .label {
+    display: inline-flex; align-items: center; gap: 16px;
+    background: var(--pill); border-radius: 999px;
+    padding: 16px 30px 16px 24px;
+    font-size: var(--label); font-weight: 500; letter-spacing: -0.005em;
+    box-shadow: 0 2px 18px rgba(25, 25, 25, 0.10);
+  }
+  .label i { width: 12px; height: 12px; border-radius: 50%; background: var(--clay); flex: none; }
+  .label .num { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 400; }
+
+  .nametag {
+    position: relative;
+    background: var(--pill); border-radius: 18px; padding: 20px 32px 22px 40px;
+    box-shadow: 0 2px 18px rgba(25, 25, 25, 0.10);
+  }
+  .nametag::before {
+    content: ""; position: absolute; left: 20px; top: 24px; bottom: 24px;
+    width: 4px; border-radius: 2px; background: var(--clay);
+  }
+  .nametag .n { font-family: var(--serif); font-size: var(--name); line-height: 1.1; }
+  .nametag .r { font-size: var(--role); color: var(--muted); margin-top: 6px; }
+
+  .stamp {
+    font-family: var(--serif); font-style: italic; font-size: calc(var(--name) * 0.95);
+    color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.35), 0 0 24px rgba(0,0,0,.25);
+  }
+  .stamp.top { position: absolute; left: var(--edge-x); top: calc(var(--edge-b) * 0.8); bottom: auto; }
+
+  /* preview helpers (only when opened in a normal browser without ?id) */
+  body.index { overflow: auto; background: var(--cream); padding: 40px; font-family: var(--sans); }
+  body.index a { display: block; color: var(--ink); margin: 6px 0; }
+</style>
+</head>
+<body>
+<script>
+  // kind: card | label | name | stamp
+  // Every overlay is rendered on a transparent background; cards are full-frame cream.
+  const GRAPHICS = [
+    // --- Title cards (script section 3) ---
+    { id: "card-01-home",      kind: "card", title: "Most of us want to grow old at home." },
+    { id: "card-02-brand",     kind: "card", brand: true, title: "Medicine Buddy",
+      sub: "A companion that remembers, so you don’t have to." },
+    { id: "card-03-asks",      kind: "card", title: "It asks first. Every time." },
+    { id: "card-04a-close",    kind: "close", step: 1 },
+    { id: "card-04b-close",    kind: "close", step: 2 },
+    { id: "card-04c-close",    kind: "close", step: 3 },
+    { id: "card-04d-credits",  kind: "close", step: 4 },
+
+    // --- Lower labels for the arm sequence (shots 13–19) ---
+    { id: "label-01-confirmed", kind: "label", text: "Confirmed by voice" },
+    { id: "label-02-ocr",       kind: "label", text: "Label read", num: "0.97" },
+    { id: "label-03-placed",    kind: "label", text: "Placed · verified" },
+    { id: "label-04-taken",     kind: "label", text: "Taken · logged" },
+
+    // --- Montage labels (shots 29–32) ---
+    { id: "label-05-letter",    kind: "label", text: "Reads letters aloud" },
+    { id: "label-06-stretch",   kind: "label", text: "Suggests a gentle stretch" },
+    { id: "label-07-call",      kind: "label", text: "Calls the family" },
+    { id: "label-08-calendar",  kind: "label", text: "Knows what’s on today" },
+    { id: "label-09-memory",    kind: "label", text: "Saved to Mario’s memories" },
+    { id: "label-10-alert",     kind: "label", text: "Caregiver alerted" },
+
+    // --- Name tags ---
+    { id: "name-01-mario",  kind: "name", name: "Mario",  role: "Lives at home" },
+    { id: "name-02-giulia", kind: "name", name: "Giulia", role: "His daughter · caregiver" },
+    { id: "name-03-luca",   kind: "name", name: "Luca",   role: "His grandson" },
+    { id: "name-04-reachy", kind: "name", name: "Reachy", role: "Medicine Buddy" },
+
+    // --- Time stamps (top-left, white serif italic over footage) ---
+    { id: "stamp-01-first-day", kind: "stamp", text: "The first day" },
+    { id: "stamp-02-nine",      kind: "stamp", text: "9:00 AM" },
+    { id: "stamp-03-later",     kind: "stamp", text: "A few days later" },
+    { id: "stamp-04-evening",   kind: "stamp", text: "Evening" },
+  ];
+
+  const CLOSE_LINES = [
+    "Reminds. Asks. Remembers.",
+    "Never gives medical advice.<br>Never moves without a yes.",
+    "Medicine Buddy",
+  ];
+
+  const q = new URLSearchParams(location.search);
+  const id = q.get("id");
+  const vertical = q.get("fmt") === "9x16";
+  if (vertical) document.documentElement.classList.add("v");
+
+  function el(tag, cls, html) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html != null) e.innerHTML = html;
+    return e;
+  }
+
+  function render(g) {
+    const b = document.body;
+    if (g.kind === "card") {
+      const c = el("div", "card");
+      if (g.brand) c.append(el("div", "dot"));
+      c.append(el("h1", g.brand ? "brand" : "", g.title));
+      if (g.sub) c.append(el("p", "sub", g.sub));
+      b.append(c);
+    } else if (g.kind === "close") {
+      const c = el("div", "card");
+      const lines = el("div", "lines");
+      CLOSE_LINES.forEach((t, i) => {
+        const h = el("h1", i < g.step ? "" : "ghost", t);
+        if (i === 2) { h.style.fontStyle = "italic"; h.style.color = "var(--clay)"; }
+        lines.append(h);
+      });
+      c.append(lines);
+      c.append(el("div", "credit" + (g.step >= 4 ? "" : " ghost"),
+        "<b>Los Pollos For The Elders</b>Built on Reachy Mini by Pollen Robotics and the Maker Arm by MakerMods"));
+      b.append(c);
+    } else if (g.kind === "label") {
+      const o = el("div", "overlay");
+      const l = el("div", "label");
+      l.append(el("i"));
+      l.append(el("span", "", g.text));
+      if (g.num) l.append(el("span", "num", "· " + g.num));
+      o.append(l);
+      b.append(o);
+    } else if (g.kind === "name") {
+      const o = el("div", "overlay");
+      const n = el("div", "nametag");
+      n.append(el("div", "n", g.name), el("div", "r", g.role));
+      o.append(n);
+      b.append(o);
+    } else if (g.kind === "stamp") {
+      b.append(el("div", "stamp top", g.text));
+    }
+  }
+
+  if (id) {
+    const g = GRAPHICS.find(x => x.id === id);
+    if (g) render(g);
+    else document.body.textContent = "Unknown id: " + id;
+  } else {
+    document.body.className = "index";
+    document.body.append(el("h2", "", "Graphics (open one to preview)"));
+    for (const g of GRAPHICS) {
+      const a = el("a", "", g.id);
+      a.href = "?id=" + g.id;
+      document.body.append(a);
+    }
+  }
+  document.fonts.ready.then(() => document.body.setAttribute("data-ready", "1"));
+</script>
+</body>
+</html>

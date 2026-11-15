@@ -65,7 +65,7 @@ def main() -> int:
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("code"):
                 code_holder["code"] = qs["code"][0]
-                body = b"<html><body><h1>OK — return to the terminal.</h1></body></html>"
+                body = b"<html><body><h1>OK - return to the terminal.</h1></body></html>"
                 self.send_response(200)
             else:
                 err = qs.get("error", ["unknown"])[0]

@@ -637,14 +637,29 @@ class CalendarMixin:
             "as an all-day note"
         )
         google_note, google_ok = self._push_create_to_google(ev)
-        where = "your Google calendar" if google_ok else "the calendar"
-        hint = f"I've put “{title}” on {where} {when}."
-        if google_note and not google_ok:
-            hint = f"{hint} {google_note}"
+        gcfg = self._google_cfg()
+        if google_ok:
+            hint = (
+                f"I've added “{title}” to your Google Calendar "
+                f"({gcfg.calendar_id}) {when}."
+            )
+        elif gcfg.configured:
+            hint = (
+                f"I've saved “{title}” on the companion calendar {when}, "
+                f"but Google Calendar sync failed. {google_note}"
+            ).strip()
+        else:
+            hint = (
+                f"I've put “{title}” on the companion calendar only {when}. "
+                "Google Calendar write is not connected on this robot yet "
+                "(Family page → Calendar → Test Google after syncing .env)."
+            )
         return {
             "status": "ok",
             "event": _event_json(self.db.get_calendar_event(ev.id) or ev),
             "google_pushed": google_ok,
+            "google_configured": gcfg.configured,
+            "google_calendar_id": gcfg.calendar_id,
             "speak_hint": hint,
         }
 

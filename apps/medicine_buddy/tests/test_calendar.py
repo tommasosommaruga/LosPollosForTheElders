@@ -290,7 +290,9 @@ def test_create_when_tomorrow_pushes_google(
         inserted.append(body)
         assert cfg.calendar_id.startswith("tommaso-test")
         assert body["summary"] == "Take medicine A, B, C"
-        assert "recurrence" in body
+        # "tomorrow" must be one-shot — not a weekly RRULE.
+        assert "recurrence" not in body
+        assert body["start"]["dateTime"].startswith("2026-11-16T01:00:00")
         return "gcal-event-1"
 
     monkeypatch.setattr(
@@ -312,6 +314,7 @@ def test_create_when_tomorrow_pushes_google(
     assert "Google Calendar" in created["speak_hint"]
     assert created["event"]["starts_at"].startswith("2026-11-16")
     assert created["event"]["time_hhmm"] == "01:00"
+    assert created["event"]["weekdays"] == ""
     assert created["event"]["external_id"] == "gcal-event-1"
     assert len(inserted) == 1
 
@@ -321,6 +324,21 @@ def test_create_when_tomorrow_pushes_google(
     })
     assert cancelled["status"] == "ok"
     assert "Google" in cancelled["speak_hint"]
+
+
+def test_create_every_monday_still_recurring(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.db.set_setting("timezone", "Europe/Zurich")
+    monkeypatch.setattr(service, "now", lambda: SUN_EVENING)
+    created = service.create_calendar_event({
+        "title": "Gym reminder",
+        "weekdays": "monday",
+        "time": "3 AM",
+    })
+    assert created["status"] == "ok"
+    assert created["event"]["weekdays"] == "0"
+    assert created["event"]["time_hhmm"] == "03:00"
 
 
 def test_create_calendar_event_starts_at_uses_service_now(

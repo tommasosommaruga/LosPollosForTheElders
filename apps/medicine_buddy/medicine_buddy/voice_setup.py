@@ -94,9 +94,14 @@ def parse_time_hhmm(raw: str) -> str:
 
 def describe_weekdays(weekdays: str) -> str:
     """Stored weekdays -> words Reachy can say: 'every day', 'every Monday', 'on weekdays'."""
-    if weekdays.strip() == "*":
+    raw = (weekdays or "").strip()
+    if not raw:
+        return "once"
+    if raw == "*":
         return "every day"
-    codes = [int(c) for c in weekdays.split(",") if c.strip()]
+    codes = [int(c) for c in raw.split(",") if c.strip()]
+    if not codes:
+        return "once"
     if codes == [0, 1, 2, 3, 4]:
         return "on weekdays"
     if codes == [5, 6]:
@@ -104,6 +109,8 @@ def describe_weekdays(weekdays: str) -> str:
     names = [DAY_SPOKEN[c] for c in codes]
     if len(names) == 1:
         return f"every {names[0]}"
+    if len(names) == 2:
+        return f"on {names[0]} and {names[1]}"
     return "on " + ", ".join(names[:-1]) + " and " + names[-1]
 
 

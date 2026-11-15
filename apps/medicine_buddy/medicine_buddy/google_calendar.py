@@ -24,7 +24,8 @@ logger = logging.getLogger("medicine_buddy.google_calendar")
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 CAL_API = "https://www.googleapis.com/calendar/v3"
-HTTP_TIMEOUT_S = 15
+# Keep short so voice tools do not stall the realtime session ("function outputs pending").
+HTTP_TIMEOUT_S = 8
 
 ENV_CLIENT_ID = "MEDICINE_BUDDY_GOOGLE_CLIENT_ID"
 ENV_CLIENT_SECRET = "MEDICINE_BUDDY_GOOGLE_CLIENT_SECRET"

@@ -26,6 +26,23 @@ _UNKNOWN_HINT = (
     "Try today, tomorrow, next week, in 3 days, a weekday, or YYYY-MM-DD."
 )
 
+# Phrases that mean a single calendar day (not a weekly recurrence).
+_ONE_SHOT_KEYS = frozenset({"today", "tonight", "tomorrow", "yesterday"})
+
+
+def is_one_shot_when(text: str) -> bool:
+    """True for today/tomorrow/ISO/in-N-days — voice should create one event, not RRULE."""
+    key = re.sub(r"\s+", " ", (text or "").strip().casefold())
+    if not key:
+        return False
+    if key in _ONE_SHOT_KEYS:
+        return True
+    if _ISO_DATE.match(key):
+        return True
+    if _IN_N_DAYS.match(key) or _N_DAYS_AGO.match(key):
+        return True
+    return False
+
 
 @dataclass(frozen=True)
 class TimeWindow:

@@ -37,7 +37,7 @@ from medicine_buddy.google_calendar import (
     next_occurrence_date,
     probe_google_calendar,
 )
-from medicine_buddy.relative_time import TimeWindow, parse_window
+from medicine_buddy.relative_time import TimeWindow, is_one_shot_when, parse_window
 from medicine_buddy.voice_setup import describe_time, describe_weekdays, parse_time_hhmm, parse_weekdays
 
 logger = logging.getLogger("medicine_buddy.calendar")
@@ -584,24 +584,36 @@ class CalendarMixin:
         when_raw = str(body.get("when") or body.get("date") or "").strip()
         now = self.now()
         starts_at = now.date().isoformat()
+        # "tomorrow" / ISO / "in 3 days" → one event. Weekday names → recurring unless one-shot when.
+        one_shot = False
         if when_raw:
             try:
                 # ISO date alone, or relative phrase (tomorrow, Monday, …).
                 if len(when_raw) == 10 and when_raw[4] == "-" and when_raw[7] == "-":
                     starts_at = date.fromisoformat(when_raw).isoformat()
+                    if not weekdays_raw:
+                        one_shot = True
                 else:
                     window = parse_window(when_raw, now)
                     starts_at = window.start.date().isoformat()
                     if not weekdays_raw:
-                        weekdays_raw = when_raw
+                        if is_one_shot_when(when_raw):
+                            one_shot = True
+                        else:
+                            # "Monday" without "every" still means that weekday recurring.
+                            weekdays_raw = when_raw
             except ValueError as exc:
                 return {"error": str(exc), "speak_hint": f"I didn't understand the day. {exc}."}
-        if not weekdays_raw:
+        if one_shot:
+            weekdays_raw = ""
+        elif not weekdays_raw:
             weekdays_raw = "daily"
         try:
             time_hhmm = parse_time_hhmm(time_raw) if time_raw else ""
             weekdays = (
-                parse_weekdays(weekdays_raw, as_of=now.date()) if time_hhmm else ""
+                ""
+                if one_shot or not time_hhmm
+                else parse_weekdays(weekdays_raw, as_of=now.date())
             )
         except ValueError as exc:
             return {"error": str(exc), "speak_hint": f"I didn't understand the time or day. {exc}."}
@@ -611,7 +623,7 @@ class CalendarMixin:
             if err and err.get("error"):
                 return err
         # Anchor recurrence / Google start on the first matching day on/after starts_at.
-        if time_hhmm:
+        if time_hhmm and weekdays:
             starts_at = next_occurrence_date(
                 weekdays, starts_at, as_of=date.fromisoformat(starts_at)
             ).isoformat()
@@ -631,11 +643,12 @@ class CalendarMixin:
             source="local",
             status="active",
         )
-        when = (
-            f"{describe_weekdays(weekdays)} at {describe_time(time_hhmm)}"
-            if time_hhmm else
-            "as an all-day note"
-        )
+        if time_hhmm and weekdays:
+            when = f"{describe_weekdays(weekdays)} at {describe_time(time_hhmm)}"
+        elif time_hhmm:
+            when = f"on {starts_at} at {describe_time(time_hhmm)}"
+        else:
+            when = "as an all-day note"
         google_note, google_ok = self._push_create_to_google(ev)
         gcfg = self._google_cfg()
         if google_ok:

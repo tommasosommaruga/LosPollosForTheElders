@@ -211,6 +211,44 @@ def test_http_client_posts_move_object_path() -> None:
     assert arm.last_post_body["object"]["label"] == "water bottle"
 
 
+def test_move_object_falls_back_to_dispense_on_404() -> None:
+    """Arm PCs that only expose /v1/dispense still handle bottles by name."""
+    arm = _FakeArmHttp({
+        "ok": True,
+        "final_state": "placed",
+        "detect_detail": "bottle_via_dispense",
+    })
+
+    def _post(path: str, body: str) -> dict:
+        if path.endswith("move_object"):
+            raise RuntimeError(
+                'arm HTTP 404 at http://arm.test/v1/move_object: {"error": "not found"}'
+            )
+        return _FakeArmHttp._post(arm, path, body)
+
+    arm._post = _post  # type: ignore[method-assign]
+    result = arm.move_object(label="small bottle", destination="bowl", kind_hint="bottle")
+    assert result.ok and result.final_state == "placed"
+    assert arm.last_post_path == "/v1/dispense"
+    assert arm.last_post_body is not None
+    assert arm.last_post_body["message_type"] == "dispense"
+    assert arm.last_post_body["medicine"]["name"] == "small bottle"
+
+
+def test_move_object_can_force_dispense_via_env(monkeypatch) -> None:
+    monkeypatch.setenv("MEDICINE_BUDDY_ARM_MOVE_VIA", "dispense")
+    arm = _FakeArmHttp({
+        "ok": True,
+        "final_state": "placed",
+        "detect_detail": "forced",
+    })
+    result = arm.move_object(label="small bottle")
+    assert result.ok
+    assert arm.last_post_path == "/v1/dispense"
+    assert arm.last_post_body is not None
+    assert arm.last_post_body["medicine"]["name"] == "small bottle"
+
+
 def test_api_move_object_needs_confirm_then_demo_ok(tmp_path: Path) -> None:
     cat = MedicineCatalog({"Aspirin": []})
     svc = MedicineBuddyService(

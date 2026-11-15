@@ -26,15 +26,24 @@ class CreateCalendarEvent(Tool):
     name = "create_calendar_event"
     description = (
         "Add a companion calendar event (doctor visit, family visit, walk, note). "
-        "NOT for medicines — use schedule_medicine for those. "
-        "title: short name; weekdays: daily/weekdays/Mon,Wed; time: 09:00 or 3 PM (optional for all-day). "
+        "When Google Calendar write is connected, this also creates the event in Google. "
+        "NOT for catalog medicines — use schedule_medicine for those. "
+        "title: short name; when: tomorrow/today/YYYY-MM-DD (optional); "
+        "weekdays: daily/weekdays/Mon,Wed/tomorrow; time: 09:00 or 1 AM (optional for all-day). "
         "Always read speak_hint aloud."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
             "title": {"type": "string", "description": "Event title, e.g. Physio appointment"},
-            "weekdays": {"type": "string", "description": "daily, weekdays, or day names"},
+            "when": {
+                "type": "string",
+                "description": "Day: tomorrow, today, a weekday name, or YYYY-MM-DD",
+            },
+            "weekdays": {
+                "type": "string",
+                "description": "daily, weekdays, Mon,Wed, or tomorrow (recurring that weekday)",
+            },
             "time": {"type": "string", "description": "Local time HH:MM or 3 PM; omit for all-day"},
             "person": {"type": "string", "description": "Whose event, if known"},
             "description": {"type": "string", "description": "Optional short note"},
@@ -44,13 +53,18 @@ class CreateCalendarEvent(Tool):
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         del deps
-        body = {
+        body: dict[str, Any] = {
             "title": kwargs.get("title"),
-            "weekdays": kwargs.get("weekdays", "daily"),
             "time": kwargs.get("time"),
             "person": kwargs.get("person"),
             "description": kwargs.get("description"),
         }
+        if kwargs.get("when"):
+            body["when"] = kwargs["when"]
+        if kwargs.get("weekdays"):
+            body["weekdays"] = kwargs["weekdays"]
+        elif not kwargs.get("when"):
+            body["weekdays"] = "daily"
         payload = _api_request("POST", "/calendar/create", body)
         logger.info("create_calendar_event → %s", payload.get("status") or payload.get("error"))
         return payload

@@ -115,4 +115,16 @@ def test_profile_lists_new_tools() -> None:
     ).read_text(encoding="utf-8")
     assert "start_family_call" in profile
     assert "suggest_activity" in profile
-    assert "Should I bring your" in profile
+    assert "encourage self-care" in profile.lower()
+
+
+def test_encourage_self_care_toggle_persists(svc: MedicineBuddyService) -> None:
+    assert svc.encourage_self_care() is True  # default
+    off = svc.settings_encourage_self_care({"enabled": False})
+    assert off["enabled"] is False
+    assert "OFF" in off["message"]
+    assert svc.encourage_self_care() is False
+    assert svc.health()["encourage_self_care"] is False
+    on = svc.settings_encourage_self_care({"enabled": True})
+    assert on["enabled"] is True
+    assert svc.encourage_self_care() is True

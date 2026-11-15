@@ -26,6 +26,17 @@ from medicine_buddy.calendar_ics import (
 from medicine_buddy.calendar_mirror import backfill_medicine_mirrors, medicine_mirror_uid, mirror_schedule
 from medicine_buddy.companion_settings import validate_http_url
 from medicine_buddy.db import CalendarEvent, Medicine, Schedule
+from medicine_buddy.google_calendar import (
+    SETTING_CALENDAR_ID,
+    build_google_event_body,
+    delete_google_event,
+    ensure_timezone_name,
+    google_write_status,
+    insert_google_event,
+    load_google_cal_config,
+    next_occurrence_date,
+    probe_google_calendar,
+)
 from medicine_buddy.relative_time import TimeWindow, parse_window
 from medicine_buddy.voice_setup import describe_time, describe_weekdays, parse_time_hhmm, parse_weekdays
 
@@ -39,8 +50,8 @@ SYNC_INTERVAL_S = 15 * 60
 FETCH_TIMEOUT_S = 12
 FETCH_MAX_BYTES = 1_500_000
 GOOGLE_HINT = (
-    "Google cloud needs a public/tunnel export URL; "
-    "LAN calendar apps can use the subscribe link."
+    "Subscribe link is pull-only. For voice create/cancel into Google Calendar, "
+    "set OAuth env vars and the calendar id (see Google write section)."
 )
 
 
@@ -59,6 +70,7 @@ def _event_json(ev: CalendarEvent) -> dict[str, Any]:
         "medicine_name": ev.medicine_name,
         "source": ev.source,
         "status": ev.status,
+        "external_id": ev.external_id,
     }
 
 
@@ -134,6 +146,12 @@ class CalendarMixin:
             return None
         return self.build_export_ics()
 
+    def google_calendar_id(self) -> str:
+        return (self.db.get_setting(SETTING_CALENDAR_ID) or "").strip()
+
+    def _google_cfg(self):
+        return load_google_cal_config(self.google_calendar_id())
+
     def settings_calendar(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
         body = body or {}
         if body.get("rotate_token"):
@@ -144,15 +162,23 @@ class CalendarMixin:
             except ValueError as exc:
                 return {"error": str(exc)}
             self.db.set_setting(IMPORT_URL_KEY, cleaned)
+        if "google_calendar_id" in body:
+            cal_id = " ".join(str(body.get("google_calendar_id") or "").split())[:200]
+            self.db.set_setting(SETTING_CALENDAR_ID, cal_id)
         if body.get("sync"):
             sync = self.sync_calendar_import()
             if sync.get("error") and not sync.get("status"):
                 return sync
+        probe: dict[str, Any] | None = None
+        if body.get("probe_google"):
+            probe = probe_google_calendar(self._google_cfg())
         # Mirrors power the Family unified list; keep them in sync with schedules.
         backfill_medicine_mirrors(self.db)
         proposals = [_event_json(e) for e in self.db.list_calendar_events(status="proposed", kind="medicine")]
         upcoming = self._upcoming_companion_summaries(limit=8)
         token = self.calendar_export_token()
+        gcfg = self._google_cfg()
+        gstatus = google_write_status(gcfg)
         return {
             "status": "ok",
             "export_token": token,
@@ -161,11 +187,18 @@ class CalendarMixin:
             "last_sync": self.db.get_setting(LAST_SYNC_KEY) or "",
             "last_sync_error": self.db.get_setting(LAST_SYNC_ERROR_KEY) or "",
             "google_hint": GOOGLE_HINT,
+            "google_calendar_id": gcfg.calendar_id,
+            "google_write": gstatus,
+            "google_probe": probe,
             "unified": self._unified_calendar_entries(),
             "proposals": proposals,
             "upcoming": upcoming,
             "message": (
-                "Calendar ready — subscribe with the export link; paste an ICS URL to import."
+                (
+                    "Calendar ready — subscribe + import ICS; voice also writes to Google."
+                    if gstatus["configured"]
+                    else "Calendar ready — subscribe with the export link; paste an ICS URL to import."
+                )
                 if token else
                 "Calendar token missing; rotate to create one."
             ),
@@ -537,7 +570,7 @@ class CalendarMixin:
         title = " ".join(str(body.get("title") or body.get("name") or "").split())
         if not title:
             return {"error": "title is required", "speak_hint": "What should I put on the calendar?"}
-        # Never create medicine schedules through this path.
+        # Never create medicine schedules through this path (Med: … or catalog hit).
         if medicine_name_from_summary(title) or self._looks_like_medicine(title):
             return {
                 "error": "use schedule_medicine for medicines",
@@ -547,11 +580,28 @@ class CalendarMixin:
                 ),
             }
         time_raw = str(body.get("time") or body.get("time_hhmm") or "").strip()
-        weekdays_raw = str(body.get("weekdays") or body.get("days") or "daily").strip()
+        weekdays_raw = str(body.get("weekdays") or body.get("days") or "").strip()
+        when_raw = str(body.get("when") or body.get("date") or "").strip()
+        now = self.now()
+        starts_at = now.date().isoformat()
+        if when_raw:
+            try:
+                # ISO date alone, or relative phrase (tomorrow, Monday, …).
+                if len(when_raw) == 10 and when_raw[4] == "-" and when_raw[7] == "-":
+                    starts_at = date.fromisoformat(when_raw).isoformat()
+                else:
+                    window = parse_window(when_raw, now)
+                    starts_at = window.start.date().isoformat()
+                    if not weekdays_raw:
+                        weekdays_raw = when_raw
+            except ValueError as exc:
+                return {"error": str(exc), "speak_hint": f"I didn't understand the day. {exc}."}
+        if not weekdays_raw:
+            weekdays_raw = "daily"
         try:
             time_hhmm = parse_time_hhmm(time_raw) if time_raw else ""
             weekdays = (
-                parse_weekdays(weekdays_raw, as_of=self.now().date()) if time_hhmm else ""
+                parse_weekdays(weekdays_raw, as_of=now.date()) if time_hhmm else ""
             )
         except ValueError as exc:
             return {"error": str(exc), "speak_hint": f"I didn't understand the time or day. {exc}."}
@@ -560,16 +610,23 @@ class CalendarMixin:
             person, err = self._resolve_person(body.get("person"), for_change=False)
             if err and err.get("error"):
                 return err
+        # Anchor recurrence / Google start on the first matching day on/after starts_at.
+        if time_hhmm:
+            starts_at = next_occurrence_date(
+                weekdays, starts_at, as_of=date.fromisoformat(starts_at)
+            ).isoformat()
         uid = new_uid("local")
+        description = str(body.get("description") or "").strip()[:500]
+        all_day = not bool(time_hhmm)
         ev = self.db.upsert_calendar_event(
             uid=uid,
             kind="companion",
             title=title,
-            description=str(body.get("description") or "").strip()[:500],
+            description=description,
             weekdays=weekdays,
             time_hhmm=time_hhmm,
-            starts_at=str(body.get("date") or self.now().date().isoformat()),
-            all_day=not bool(time_hhmm),
+            starts_at=starts_at,
+            all_day=all_day,
             person_id=person.id if person else None,
             source="local",
             status="active",
@@ -579,10 +636,16 @@ class CalendarMixin:
             if time_hhmm else
             "as an all-day note"
         )
+        google_note, google_ok = self._push_create_to_google(ev)
+        where = "your Google calendar" if google_ok else "the calendar"
+        hint = f"I've put “{title}” on {where} {when}."
+        if google_note and not google_ok:
+            hint = f"{hint} {google_note}"
         return {
             "status": "ok",
-            "event": _event_json(ev),
-            "speak_hint": f"I've put “{title}” on the calendar {when}.",
+            "event": _event_json(self.db.get_calendar_event(ev.id) or ev),
+            "google_pushed": google_ok,
+            "speak_hint": hint,
         }
 
     def cancel_calendar_event(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -611,11 +674,50 @@ class CalendarMixin:
                 "event": _event_json(target),
                 "speak_hint": f"Should I remove “{target.title}” from the calendar?",
             }
+        google_note = self._push_cancel_to_google(target)
         self.db.set_calendar_event_status(target.id, "cancelled")
+        hint = f"Okay, I removed “{target.title}” from the calendar."
+        if google_note:
+            hint = f"{hint} {google_note}"
         return {
             "status": "ok",
-            "speak_hint": f"Okay, I removed “{target.title}” from the calendar.",
+            "speak_hint": hint,
         }
+
+    def _push_create_to_google(self, ev: CalendarEvent) -> tuple[str, bool]:
+        """Returns (note_for_speak, pushed_ok). Local row always remains."""
+        cfg = self._google_cfg()
+        if not cfg.configured:
+            # Stay quiet when OAuth is unset — local companion calendar still works.
+            return ("", False)
+        try:
+            body = build_google_event_body(
+                title=ev.title,
+                description=ev.description,
+                time_hhmm=ev.time_hhmm,
+                weekdays=ev.weekdays,
+                starts_at=ev.starts_at,
+                all_day=bool(ev.all_day or not ev.time_hhmm),
+                tz_name=ensure_timezone_name(self.tz()),
+            )
+            external_id = insert_google_event(cfg, body)
+            self.db.set_calendar_external_id(ev.id, external_id)
+            return ("", True)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Google Calendar create failed: %s", exc)
+            return (f"(Could not sync to Google: {str(exc)[:120]})", False)
+
+    def _push_cancel_to_google(self, ev: CalendarEvent) -> str:
+        cfg = self._google_cfg()
+        if not cfg.configured or not ev.external_id:
+            return ""
+        try:
+            delete_google_event(cfg, ev.external_id)
+            self.db.set_calendar_external_id(ev.id, "")
+            return "I also removed it from Google Calendar."
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Google Calendar delete failed: %s", exc)
+            return f"(Could not remove it from Google: {str(exc)[:120]})"
 
     def _upcoming_companion_summaries(self, *, limit: int = 8) -> list[str]:
         out: list[str] = []

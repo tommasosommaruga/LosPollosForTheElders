@@ -48,6 +48,7 @@ Use this file to see **what is plugged in and working**, **what is partial / bro
 | Safe web search (scrubbed, untrusted) | **Working** | `safe_web_search` + `web_safety.py` |
 | In-app UI: dashboard, history, conversation, DB, family, debug | **Working** | `/medicine/*` |
 | Companion calendar (ICS subscribe + import proposals) | **Working (laptop WIP until ship)** | Family page + voice tools; meds still SQLite |
+| Voice → Google Calendar write (`0.10.0`) | **Working when OAuth env set** | `create_calendar_event` / cancel push via Calendar API; Family calendar id + Test |
 | Unified clock + calendar timeline (`0.9.0`) | **Working (laptop WIP until ship)** | `get_robot_time`; `list_upcoming_events(when=…)`; med mirror; harder ICS import; Family unified list |
 | Install path: git → robot apps_venv | **Working** | `scripts/install_on_robot.sh` |
 

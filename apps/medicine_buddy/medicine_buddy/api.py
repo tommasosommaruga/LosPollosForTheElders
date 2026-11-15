@@ -126,6 +126,7 @@ class MedicineBuddyService(
             "status": "ok",
             "dry_run": self.config.dry_run,
             "arm_url_configured": bool((self.config.arm_url or "").strip()),
+            "encourage_self_care": self.encourage_self_care(),
             "service": "medicine-buddy",
             "version": __version__,
         }

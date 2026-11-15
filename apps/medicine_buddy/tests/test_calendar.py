@@ -261,6 +261,8 @@ def test_create_and_cancel_companion_event(service: MedicineBuddyService) -> Non
         "time": "10:00",
     })
     assert created["status"] == "ok"
+    assert created["google_pushed"] is False
+    assert "calendar" in created["speak_hint"].casefold()
     listed = service.list_upcoming_events({})
     assert listed["status"] == "ok"
     assert any("Garden walk" in line for line in listed["companion"])
@@ -269,6 +271,54 @@ def test_create_and_cancel_companion_event(service: MedicineBuddyService) -> Non
     done = service.cancel_calendar_event({"title": "Garden walk", "confirmed": True})
     assert done["status"] == "ok"
     assert service.db.list_calendar_events(status="active", kind="companion") == []
+
+
+def test_create_when_tomorrow_pushes_google(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.db.set_setting("timezone", "Europe/Zurich")
+    monkeypatch.setattr(service, "now", lambda: SUN_EVENING)
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_CLIENT_SECRET", "csec")
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_REFRESH_TOKEN", "rtok")
+    service.db.set_setting("google_calendar_id", "tommaso-test@group.calendar.google.com")
+
+    inserted: list[dict] = []
+
+    def fake_insert(cfg, body):  # noqa: ANN001
+        inserted.append(body)
+        assert cfg.calendar_id.startswith("tommaso-test")
+        assert body["summary"] == "Take medicine A, B, C"
+        assert "recurrence" in body
+        return "gcal-event-1"
+
+    monkeypatch.setattr(
+        "medicine_buddy.calendar_service.insert_google_event", fake_insert
+    )
+    monkeypatch.setattr(
+        "medicine_buddy.calendar_service.delete_google_event",
+        lambda cfg, eid: None,
+    )
+
+    created = service.create_calendar_event({
+        "title": "Take medicine A, B, C",
+        "when": "tomorrow",
+        "time": "1 AM",
+    })
+    assert created["status"] == "ok"
+    assert created["google_pushed"] is True
+    assert "Google" in created["speak_hint"]
+    assert created["event"]["starts_at"].startswith("2026-11-16")
+    assert created["event"]["time_hhmm"] == "01:00"
+    assert created["event"]["external_id"] == "gcal-event-1"
+    assert len(inserted) == 1
+
+    cancelled = service.cancel_calendar_event({
+        "title": "Take medicine A, B, C",
+        "confirmed": True,
+    })
+    assert cancelled["status"] == "ok"
+    assert "Google" in cancelled["speak_hint"]
 
 
 def test_create_calendar_event_starts_at_uses_service_now(
@@ -347,13 +397,16 @@ def test_settings_calendar_roundtrip(service: MedicineBuddyService) -> None:
     assert first["status"] == "ok"
     assert first["export_token"]
     assert first["google_hint"]
-    assert "public/tunnel" in first["google_hint"]
+    assert "Google" in first["google_hint"]
+    assert first["google_write"]["configured"] is False
     assert first["unified"] == []
     assert "last_sync" in first and "last_sync_error" in first
     rotated = service.settings_calendar({"rotate_token": True})
     assert rotated["export_token"] != first["export_token"]
     saved = service.settings_calendar({"import_url": "https://example.com/cal.ics"})
     assert saved["import_url"] == "https://example.com/cal.ics"
+    with_gcal = service.settings_calendar({"google_calendar_id": "tommaso-test@group.calendar.google.com"})
+    assert with_gcal["google_calendar_id"] == "tommaso-test@group.calendar.google.com"
 
 
 def test_settings_calendar_unified_list(service: MedicineBuddyService) -> None:

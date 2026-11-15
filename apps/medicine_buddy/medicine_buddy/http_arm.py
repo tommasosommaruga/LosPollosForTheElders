@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import urllib.error
 import urllib.request
@@ -160,21 +161,58 @@ class HttpArmClient:
         kind_hint: str | None = None,
         request_id: str | None = None,
     ) -> MoveObjectResult:
+        """POST /v1/move_object; if the arm PC only has /v1/dispense (404), fall back.
+
+        Several arm builds only implement dispense and locate by spoken name
+        (e.g. "small bottle") — same JSON shape as a medicine dispense.
+        """
         rid = request_id or new_request_id()
-        cmd = MoveObjectCommand(
-            request_id=rid,
-            object=ObjectRef(label=label, kind_hint=kind_hint or None),
-            destination=destination or "bowl",
-            dry_run=self.dry_run,
-        )
-        raw = self._post(MOVE_OBJECT_PATH, cmd.to_json())
-        result = MoveObjectResult.from_dict(raw, fallback_request_id=rid)
+        force_dispense = (os.environ.get("MEDICINE_BUDDY_ARM_MOVE_VIA") or "").strip().lower() in {
+            "dispense", "v1/dispense", "/v1/dispense",
+        }
+        if force_dispense:
+            result = self._move_via_dispense(label=label, request_id=rid)
+        else:
+            cmd = MoveObjectCommand(
+                request_id=rid,
+                object=ObjectRef(label=label, kind_hint=kind_hint or None),
+                destination=destination or "bowl",
+                dry_run=self.dry_run,
+            )
+            try:
+                raw = self._post(MOVE_OBJECT_PATH, cmd.to_json())
+                result = MoveObjectResult.from_dict(raw, fallback_request_id=rid)
+            except RuntimeError as exc:
+                # Arm returns HTTP 404 {"error":"not found"} when the path is missing.
+                if "HTTP 404" not in str(exc):
+                    raise
+                logger.info(
+                    "arm /v1/move_object not found; falling back to /v1/dispense for %r",
+                    label,
+                )
+                result = self._move_via_dispense(label=label, request_id=rid)
         self.last_move = result
         logger.info(
             "arm move_object_result request_id=%s ok=%s state=%s label=%s",
             result.request_id, result.ok, result.final_state, label,
         )
         return result
+
+    def _move_via_dispense(self, *, label: str, request_id: str) -> MoveObjectResult:
+        """Map a graspable label onto /v1/dispense (arm locates by name)."""
+        dispense = self.dispense(
+            medicine_id=0,
+            medicine_name=label,
+            person=None,
+            request_id=request_id,
+        )
+        return MoveObjectResult(
+            request_id=dispense.request_id,
+            ok=dispense.ok,
+            final_state=dispense.final_state,
+            detect_detail=dispense.detect_detail or (dispense.error or ""),
+            error=dispense.error,
+        )
 
     def to_adherence(self, result: CheckTakenResult) -> AdherenceResult:
         if result.taken is True:

@@ -142,6 +142,7 @@ class CalendarEvent:
     medicine_name: str | None
     source: str  # local | import
     status: str  # active | cancelled | proposed | rejected
+    external_id: str  # Google Calendar event id when pushed
     created_at: str
     updated_at: str
 
@@ -297,6 +298,7 @@ class Database:
                     source TEXT NOT NULL DEFAULT 'local',
                     status TEXT NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'cancelled', 'proposed', 'rejected')),
+                    external_id TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -304,6 +306,7 @@ class Database:
             )
             self._migrate_medicines_per_person()
             self._migrate_people_name_key()
+            self._migrate_calendar_external_id()
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_medicine_person_name "
                 "ON medicines (COALESCE(person_id, 0), name COLLATE NOCASE)"
@@ -343,6 +346,14 @@ class Database:
             if r["name_key"] != key:
                 self._conn.execute("UPDATE people SET name_key = ? WHERE id = ?", (key, r["id"]))
         self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_people_name_key ON people (name_key)")
+
+    def _migrate_calendar_external_id(self) -> None:
+        """Store Google Calendar event ids for voice create/cancel push."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(calendar_events)")}
+        if "external_id" not in cols:
+            self._conn.execute(
+                "ALTER TABLE calendar_events ADD COLUMN external_id TEXT NOT NULL DEFAULT ''"
+            )
 
     def _migrate_medicines_per_person(self) -> None:
         """v0.1/v0.2 databases had globally-unique medicine names and no person_id.
@@ -600,11 +611,12 @@ class Database:
     # ---- companion calendar (medicine schedules stay in `schedules`)
     _CAL_COLS = (
         "id, uid, kind, title, description, weekdays, time_hhmm, starts_at, ends_at, "
-        "all_day, person_id, medicine_name, source, status, created_at, updated_at"
+        "all_day, person_id, medicine_name, source, status, external_id, created_at, updated_at"
     )
 
     @staticmethod
     def _calendar_event(row: sqlite3.Row) -> CalendarEvent:
+        keys = row.keys()
         return CalendarEvent(
             id=row["id"],
             uid=row["uid"],
@@ -620,6 +632,7 @@ class Database:
             medicine_name=row["medicine_name"],
             source=row["source"] or "local",
             status=row["status"],
+            external_id=(row["external_id"] if "external_id" in keys else "") or "",
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -640,6 +653,7 @@ class Database:
         medicine_name: str | None = None,
         source: str = "local",
         status: str = "active",
+        external_id: str | None = None,
     ) -> CalendarEvent:
         if kind not in CALENDAR_KINDS:
             raise ValueError(f"Unknown calendar kind: {kind}")
@@ -651,32 +665,42 @@ class Database:
         now = utc_now_iso()
         existing = self.get_calendar_event_by_uid(uid)
         if existing is None:
+            ext = (external_id or "").strip()
             cur = self._write(
                 f"""INSERT INTO calendar_events
                     (uid, kind, title, description, weekdays, time_hhmm, starts_at, ends_at,
-                     all_day, person_id, medicine_name, source, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     all_day, person_id, medicine_name, source, status, external_id,
+                     created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     uid, kind, title, description.strip(), weekdays, time_hhmm, starts_at, ends_at,
-                    1 if all_day else 0, person_id, medicine_name, source, status, now, now,
+                    1 if all_day else 0, person_id, medicine_name, source, status, ext, now, now,
                 ),
             )
             row = self._one(f"SELECT {self._CAL_COLS} FROM calendar_events WHERE id = ?", (cur.lastrowid,))
             assert row is not None
             return self._calendar_event(row)
+        ext = existing.external_id if external_id is None else external_id.strip()
         self._write(
             """UPDATE calendar_events SET kind = ?, title = ?, description = ?, weekdays = ?,
                time_hhmm = ?, starts_at = ?, ends_at = ?, all_day = ?, person_id = ?,
-               medicine_name = ?, source = ?, status = ?, updated_at = ?
+               medicine_name = ?, source = ?, status = ?, external_id = ?, updated_at = ?
              WHERE uid = ?""",
             (
                 kind, title, description.strip(), weekdays, time_hhmm, starts_at, ends_at,
-                1 if all_day else 0, person_id, medicine_name, source, status, now, uid,
+                1 if all_day else 0, person_id, medicine_name, source, status, ext, now, uid,
             ),
         )
         updated = self.get_calendar_event_by_uid(uid)
         assert updated is not None
         return updated
+
+    def set_calendar_external_id(self, event_id: int, external_id: str) -> CalendarEvent | None:
+        self._write(
+            "UPDATE calendar_events SET external_id = ?, updated_at = ? WHERE id = ?",
+            ((external_id or "").strip(), utc_now_iso(), event_id),
+        )
+        return self.get_calendar_event(event_id)
 
     def get_calendar_event(self, event_id: int) -> CalendarEvent | None:
         row = self._one(f"SELECT {self._CAL_COLS} FROM calendar_events WHERE id = ?", (event_id,))

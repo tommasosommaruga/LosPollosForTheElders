@@ -16,6 +16,7 @@ Configuration (environment or a .env file, see .env.example at the repo root):
   MEDICINE_BUDDY_HOST      API bind address (default 127.0.0.1 - keep it local)
   MEDICINE_BUDDY_PORT      API port (default 8787)
   MEDICINE_BUDDY_DB        database file (default: see medicine_buddy.db.default_db_path)
+  MEDICINE_BUDDY_ARM_URL   Maker Arm PC base URL (also ~/.local/share/medicine-buddy/.env)
   MEDICINE_BUDDY_VOICE_GUARD  1/0 (default 1)
 """
 
@@ -34,13 +35,32 @@ PROFILE = "medicine_caregiver"
 logger = logging.getLogger("medicine_buddy.app")
 
 
+def _installed_app_env_path() -> Path:
+    """Persistent .env on an installed robot/laptop (survives pip reinstall)."""
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return base / "medicine-buddy" / ".env"
+
+
 def _load_dotenv() -> None:
-    """.env in the current folder, then at the repo root / project folder (never overrides)."""
+    """.env candidates (never override real environment variables).
+
+    Order: cwd → installed data dir (~/.local/share/medicine-buddy/.env on the robot)
+    → package/site-packages parent → repo root (laptop checkout).
+    """
     try:
         from dotenv import load_dotenv
     except ImportError:  # python-dotenv comes with the conversation app; optional otherwise
         return
-    for candidate in (Path.cwd() / ".env", PACKAGE_DIR.parent / ".env", PACKAGE_DIR.parents[2] / ".env"):
+    candidates = (
+        Path.cwd() / ".env",
+        _installed_app_env_path(),
+        PACKAGE_DIR.parent / ".env",
+        PACKAGE_DIR.parents[2] / ".env",
+    )
+    for candidate in candidates:
         if candidate.is_file():
             load_dotenv(candidate, override=False)
 
@@ -182,6 +202,12 @@ class MedicineBuddy(ReachyMiniApp):
             start_wake_greeting(service, speaker, stop_event)
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
         logger.info("In-app pages (open by default): http://<this-machine>:7860/medicine")
+        arm_url = (service.config.arm_url or "").strip()
+        logger.info(
+            "Arm URL: %s  |  dry_run: %s",
+            arm_url or "(empty → FakeArm demo — set MEDICINE_BUDDY_ARM_URL)",
+            service.config.dry_run,
+        )
         logger.info(
             "Database: %s  |  require passphrases: %s  |  voice guard: %s  |  wake greeting: %s  |  profile: %s (locked)",
             db_path, service.require_passphrases(), service.guard.enabled, wake_on, PROFILE,

@@ -176,6 +176,11 @@ fingerprint. This page works only on this computer.
     <button type="button" id="cal-save-import">Save</button>
     <button class="primary" type="button" id="cal-sync">Sync now</button></div>
     <span class="hint">Use the calendar's secret / publish address. Medicine-like events become proposals below.</span></div>
+  <div class="step" style="margin-top:12px"><label for="cal-google-id">Google Calendar ID (voice write)</label>
+    <div class="row"><input id="cal-google-id" autocomplete="off" placeholder="e.g. …@group.calendar.google.com" style="flex:1;min-width:200px">
+    <button type="button" id="cal-save-google">Save</button>
+    <button type="button" id="cal-probe-google">Test Google</button></div>
+    <span class="hint" id="cal-google-write">OAuth client id/secret/refresh token live in .env (scripts/google_calendar_oauth.py).</span></div>
   <p class="hint" id="cal-sync-meta" style="margin-top:8px"></p>
   <div id="cal-proposals" style="margin-top:12px"></div>
   <div id="cal-unified" style="margin-top:12px"></div>
@@ -413,7 +418,11 @@ $("alert-off").addEventListener("click", () => saveAlerts({enabled: false}));
 $("alert-test").addEventListener("click", () => saveAlerts({test: true}));
 
 function showCompanion(selfR, checkR, nudgeR) {
-  if (selfR && selfR.status === "ok") $("self-status").textContent = selfR.message;
+  if (selfR && selfR.status === "ok") {
+    $("self-status").textContent = selfR.message;
+    $("self-on").disabled = !!selfR.enabled;
+    $("self-off").disabled = !selfR.enabled;
+  }
   if (checkR && checkR.status === "ok") {
     $("checkin-status").textContent = checkR.message;
     $("checkin-hours").value = checkR.interval_hours;
@@ -437,8 +446,12 @@ async function loadCompanion() {
 async function setSelf(enabled) {
   clearMsg($("companion-msg"));
   const r = await api("/settings/encourage_self_care", {enabled: enabled});
-  if (r.status === "ok") { $("self-status").textContent = r.message; msg($("companion-msg"), r.message, true); }
-  else msg($("companion-msg"), r.error || "Could not save.", false);
+  if (r.status === "ok") {
+    $("self-status").textContent = r.message;
+    $("self-on").disabled = !!r.enabled;
+    $("self-off").disabled = !r.enabled;
+    msg($("companion-msg"), r.message, true);
+  } else msg($("companion-msg"), r.error || "Could not save.", false);
 }
 
 async function setCheckins(extra) {
@@ -486,9 +499,21 @@ function showCalendar(r) {
   }
   $("cal-status").textContent = r.message || "Calendar ready.";
   $("cal-google-hint").textContent = r.google_hint ||
-    "Google cloud needs a public/tunnel export URL; LAN calendar apps can use the subscribe link.";
+    "Subscribe is pull-only; voice write needs Google OAuth + calendar id.";
   $("cal-export").value = calExportUrl((BASE || "") + (r.export_path || ""));
   $("cal-import").value = r.import_url || "";
+  $("cal-google-id").value = r.google_calendar_id || "";
+  const gw = r.google_write || {};
+  let gwrite = gw.configured
+    ? ("Google write: connected" + (gw.calendar_id ? (" → " + gw.calendar_id) : ""))
+    : ("Google write: not connected" + (gw.missing && gw.missing.length ? (" (missing " + gw.missing.join(", ") + ")") : ""));
+  if (gw.hint) gwrite += " — " + gw.hint;
+  if (r.google_probe) {
+    gwrite += r.google_probe.ok
+      ? (" · Test OK" + (r.google_probe.summary ? (": " + r.google_probe.summary) : ""))
+      : (" · Test failed: " + (r.google_probe.error || "unknown"));
+  }
+  $("cal-google-write").textContent = gwrite;
   let meta = "";
   if (r.last_sync) meta = "Last sync: " + r.last_sync;
   else meta = "Last sync: never";
@@ -574,6 +599,10 @@ $("cal-copy").addEventListener("click", async () => {
 $("cal-rotate").addEventListener("click", () => saveCalendar({rotate_token: true}));
 $("cal-save-import").addEventListener("click", () => saveCalendar({}));
 $("cal-sync").addEventListener("click", () => saveCalendar({sync: true}));
+$("cal-save-google").addEventListener("click", () =>
+  saveCalendar({google_calendar_id: $("cal-google-id").value.trim()}));
+$("cal-probe-google").addEventListener("click", () =>
+  saveCalendar({google_calendar_id: $("cal-google-id").value.trim(), probe_google: true}));
 
 loadPeople();
 loadGuard();

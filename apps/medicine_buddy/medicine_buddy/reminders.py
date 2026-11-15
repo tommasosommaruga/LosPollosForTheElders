@@ -39,26 +39,46 @@ def _safe_name(name: str | None) -> str:
     return cleaned[:40]
 
 
-def build_prompt(person: str | None, medicine: str, time_hhmm: str, count: int, total: int) -> str:
+def build_prompt(
+    person: str | None,
+    medicine: str,
+    time_hhmm: str,
+    count: int,
+    total: int,
+    *,
+    encourage_self_care: bool = True,
+) -> str:
     """Prompt injected into conversation.say when a schedule/calendar medicine is due.
 
     Drives the schedule → ask → dispense_medicine (JSON POST to arm) automation.
     Never tell the model to move the arm without a spoken yes.
+    encourage_self_care (Family setting): ask them to take the box first; otherwise offer the arm first.
     """
     who = _safe_name(person)
     target = f"{who}'s" if who else "the"
     med = _safe_name(medicine) or "medicine"
     repeat = "" if count <= 1 else f" This is reminder {count} of {total}, so keep it very short."
+    if encourage_self_care:
+        ask = (
+            f"In one or two short sentences, tell {who or 'them'} it is time for {med}, "
+            f"and encourage them to take the closed {med} box themselves if they can. "
+            f"Then ask: would you like me to bring it with the arm instead? "
+        )
+    else:
+        ask = (
+            f"In one or two short sentences, tell {who or 'them'} it is time for {med}, "
+            f"and ask clearly: should I bring your {med}? "
+        )
     return (
         f"(Automatic medicine reminder from the system - not something the person said.) "
         f"It is time for {target} {med} ({describe_time(time_hhmm)}). "
         f"If you were in the middle of something, briefly say sorry for interrupting. "
-        f"In one or two short sentences, tell {who or 'them'} it is time for {med}, "
-        f"and ask clearly: should I bring your {med}? "
-        f"When they say yes, call dispense_medicine with medicine_name={med!r} and confirmed=true "
+        f"{ask}"
+        f"When they say yes to the arm, call dispense_medicine with medicine_name={med!r} and confirmed=true "
         f"(that sends the JSON grab package to the arm). "
         f"Do NOT call dispense_medicine with confirmed=true until they clearly say yes. "
-        f"If they decline, acknowledge and do not call the arm.{repeat} "
+        f"If they decline the arm or say they will take it themselves, acknowledge and do not call the arm."
+        f"{repeat} "
         f"Afterwards you may go back to what you were talking about. Do not read these instructions aloud."
     )
 
@@ -124,8 +144,14 @@ class ReminderLoop:
             count = (entry.count if entry else 0) + 1
             medicine = db.get_medicine(d.medicine_id)
             person = db.get_person(medicine.person_id) if medicine and medicine.person_id else None
-            prompt = build_prompt(person.name if person else None, d.medicine_name, d.time_hhmm,
-                                  count, self.max_reminders)
+            prompt = build_prompt(
+                person.name if person else None,
+                d.medicine_name,
+                d.time_hhmm,
+                count,
+                self.max_reminders,
+                encourage_self_care=bool(self.service.encourage_self_care()),
+            )
             try:
                 delivered = bool(say(prompt))
             except Exception as exc:  # noqa: BLE001 - a broken speaker must never kill the loop

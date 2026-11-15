@@ -980,6 +980,7 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/calendar/upcoming": service.list_upcoming_events,
         "/calendar/create": service.create_calendar_event,
         "/calendar/cancel": service.cancel_calendar_event,
+        "/calendar/sync": service.sync_calendar_voice,
         "/clock/now": service.clock_now,
     }
     # Typed on the Family settings page only: never reachable by an AI tool.

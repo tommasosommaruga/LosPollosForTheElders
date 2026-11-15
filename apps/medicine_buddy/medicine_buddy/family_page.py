@@ -162,25 +162,27 @@ fingerprint. This page works only on this computer.
 
 <section class="panel" id="calpanel">
   <h2>Calendar</h2>
-  <p class="hint">Connect Outlook, Google or Apple with a subscribe link. Medicine Buddy stays the
-  source of truth for medicines; companion events (visits, appointments, notes) live here too.</p>
+  <p class="hint">Google OAuth = voice write + reliable sync. ICS subscribe/import = easier backup for
+  people who only want a calendar link (no Google Cloud setup).</p>
   <p class="hint" id="cal-status">Loading&hellip;</p>
   <p class="hint" id="cal-google-hint" style="margin-top:6px"></p>
-  <div class="step" style="margin-top:10px"><label for="cal-export">Subscribe URL (export)</label>
+  <div class="step" style="margin-top:12px"><label for="cal-google-id">Google Calendar ID (recommended)</label>
+    <div class="row"><input id="cal-google-id" autocomplete="off" placeholder="e.g. …@group.calendar.google.com" style="flex:1;min-width:200px">
+    <button type="button" id="cal-save-google">Save</button>
+    <button type="button" id="cal-probe-google">Test Google</button>
+    <button class="primary" type="button" id="cal-sync">Sync with Google</button></div>
+    <span class="hint" id="cal-google-write">OAuth client id/secret/refresh token live in .env.</span></div>
+  <div class="step" style="margin-top:12px"><label for="cal-import">ICS import URL (easy backup)</label>
+    <div class="row"><input id="cal-import" autocomplete="off" placeholder="https://…secret.ics" style="flex:1;min-width:200px">
+    <button type="button" id="cal-save-import">Save</button>
+    <button type="button" id="cal-clear-import">Clear</button>
+    <button type="button" id="cal-sync-ics">Sync ICS only</button></div>
+    <span class="hint">Paste a calendar secret/publish address. Kept as backup even when Google is on.</span></div>
+  <div class="step" style="margin-top:10px"><label for="cal-export">ICS subscribe URL (Buddy → other apps)</label>
     <div class="row"><input id="cal-export" readonly autocomplete="off" style="flex:1;min-width:200px">
     <button type="button" id="cal-copy">Copy</button>
     <button type="button" id="cal-rotate">Rotate link</button></div>
-    <span class="hint">Paste this into Outlook / Google / Apple as a calendar subscription.</span></div>
-  <div class="step" style="margin-top:12px"><label for="cal-import">Import ICS URL</label>
-    <div class="row"><input id="cal-import" autocomplete="off" placeholder="https://…secret.ics" style="flex:1;min-width:200px">
-    <button type="button" id="cal-save-import">Save</button>
-    <button class="primary" type="button" id="cal-sync">Sync now</button></div>
-    <span class="hint">Use the calendar's secret / publish address. Medicine-like events become proposals below.</span></div>
-  <div class="step" style="margin-top:12px"><label for="cal-google-id">Google Calendar ID (voice write)</label>
-    <div class="row"><input id="cal-google-id" autocomplete="off" placeholder="e.g. …@group.calendar.google.com" style="flex:1;min-width:200px">
-    <button type="button" id="cal-save-google">Save</button>
-    <button type="button" id="cal-probe-google">Test Google</button></div>
-    <span class="hint" id="cal-google-write">OAuth client id/secret/refresh token live in .env (scripts/google_calendar_oauth.py).</span></div>
+    <span class="hint">Outlook / Apple / Google can subscribe to this feed (pull-only).</span></div>
   <p class="hint" id="cal-sync-meta" style="margin-top:8px"></p>
   <div id="cal-proposals" style="margin-top:12px"></div>
   <div id="cal-unified" style="margin-top:12px"></div>
@@ -505,7 +507,8 @@ function showCalendar(r) {
   $("cal-google-id").value = r.google_calendar_id || "";
   const gw = r.google_write || {};
   let gwrite = gw.configured
-    ? ("Google write: connected" + (gw.calendar_id ? (" → " + gw.calendar_id) : ""))
+    ? ("Google write: connected" + (gw.calendar_id ? (" → " + gw.calendar_id) : "")
+       + (r.google_linked != null ? (" · " + r.google_linked + " linked") : ""))
     : ("Google write: not connected" + (gw.missing && gw.missing.length ? (" (missing " + gw.missing.join(", ") + ")") : ""));
   if (gw.hint) gwrite += " — " + gw.hint;
   if (r.google_probe) {
@@ -518,8 +521,9 @@ function showCalendar(r) {
   if (r.last_sync) meta = "Last sync: " + r.last_sync;
   else meta = "Last sync: never";
   if (r.last_sync_error) meta += (meta ? " — " : "") + "Error: " + r.last_sync_error;
-  if (r.import_url) meta += (meta ? " · " : "") + "Import URL set";
-  else meta += (meta ? " · " : "") + "No import URL";
+  if (r.import_url) meta += (meta ? " · " : "") + "ICS backup import set";
+  else meta += (meta ? " · " : "") + "No ICS import (Google-only ok)";
+  if (r.last_sync_detail && r.last_sync_detail.message) meta += " · " + r.last_sync_detail.message;
   $("cal-sync-meta").textContent = meta;
   const box = $("cal-proposals");
   box.replaceChildren();
@@ -576,7 +580,12 @@ async function loadCalendar() {
 
 async function saveCalendar(extra) {
   clearMsg($("cal-msg"));
-  const body = Object.assign({import_url: $("cal-import").value.trim()}, extra || {});
+  const body = Object.assign({}, extra || {});
+  // Only send import_url when saving that field — not on Sync / Clear / Google actions.
+  if (body.save_import) {
+    body.import_url = $("cal-import").value.trim();
+    delete body.save_import;
+  }
   const r = await api("/settings/calendar", body);
   if (r.status === "ok") { showCalendar(r); msg($("cal-msg"), r.message, true); }
   else msg($("cal-msg"), r.error || "Could not save.", false);
@@ -597,8 +606,13 @@ $("cal-copy").addEventListener("click", async () => {
   } catch (e) { msg($("cal-msg"), "Could not copy — select the URL and copy manually.", false); }
 });
 $("cal-rotate").addEventListener("click", () => saveCalendar({rotate_token: true}));
-$("cal-save-import").addEventListener("click", () => saveCalendar({}));
+$("cal-save-import").addEventListener("click", () => saveCalendar({save_import: true}));
+$("cal-clear-import").addEventListener("click", () => {
+  $("cal-import").value = "";
+  saveCalendar({clear_import: true});
+});
 $("cal-sync").addEventListener("click", () => saveCalendar({sync: true}));
+$("cal-sync-ics").addEventListener("click", () => saveCalendar({sync: true, sync_ics_only: true}));
 $("cal-save-google").addEventListener("click", () =>
   saveCalendar({google_calendar_id: $("cal-google-id").value.trim()}));
 $("cal-probe-google").addEventListener("click", () =>

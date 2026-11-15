@@ -173,6 +173,13 @@ class MedicineBuddy(ReachyMiniApp):
             calendar_sync = CalendarSyncLoop(service)
             service.calendar_sync_loop = calendar_sync
             calendar_sync.start()
+            # First Google sync soon after boot (don't block app start).
+            if service._google_cfg().configured:  # noqa: SLF001
+                threading.Thread(
+                    target=service.sync_google_calendar,
+                    name="gcal-boot-sync",
+                    daemon=True,
+                ).start()
         if os.environ.get("MEDICINE_BUDDY_REMINDERS", "1").lower() not in {"0", "false", "no", "off"}:
             ui_port = urlparse(self.custom_app_url).port or 7860
             speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")   # waits until Reachy is idle

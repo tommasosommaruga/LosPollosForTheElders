@@ -54,8 +54,8 @@ FETCH_MAX_BYTES = 1_500_000
 # Voice must not wait forever on Google; finish in background if slower than this.
 GOOGLE_VOICE_WAIT_S = 3.5
 GOOGLE_HINT = (
-    "Subscribe link is pull-only. For voice create/cancel into Google Calendar, "
-    "set OAuth env vars and the calendar id (see Google write section)."
+    "Google OAuth (recommended): voice create/cancel + Sync. "
+    "ICS subscribe/import stays available as an easier backup for apps that only support a link."
 )
 
 
@@ -158,6 +158,7 @@ class CalendarMixin:
 
     def settings_calendar(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
         body = body or {}
+        sync_result: dict[str, Any] | None = None
         if body.get("rotate_token"):
             self.rotate_calendar_token()
         if "import_url" in body:
@@ -166,17 +167,31 @@ class CalendarMixin:
             except ValueError as exc:
                 return {"error": str(exc)}
             self.db.set_setting(IMPORT_URL_KEY, cleaned)
+        if body.get("clear_import"):
+            self.db.set_setting(IMPORT_URL_KEY, "")
+            retired = 0
+            if body.get("retire_imports"):
+                retired = self._retire_ics_import_companions()
+            sync_result = {
+                "status": "ok",
+                "message": (
+                    "Cleared ICS import URL."
+                    + (f" Retired {retired} imported companion event(s)." if retired else "")
+                ),
+            }
         if "google_calendar_id" in body:
             cal_id = " ".join(str(body.get("google_calendar_id") or "").split())[:200]
             self.db.set_setting(SETTING_CALENDAR_ID, cal_id)
         if body.get("sync"):
-            # Prefer Google API bidirectional sync when configured; else ICS import URL.
-            if self._google_cfg().configured:
-                sync = self.sync_google_calendar()
+            # Both can stay saved. Default Sync = Google when configured; ICS-only button forces ICS.
+            if body.get("sync_ics_only"):
+                sync_result = self.sync_calendar_import()
+            elif self._google_cfg().configured:
+                sync_result = self.sync_google_calendar()
             else:
-                sync = self.sync_calendar_import()
-            if sync.get("error") and not sync.get("status"):
-                return sync
+                sync_result = self.sync_calendar_import()
+            if sync_result.get("error") and not sync_result.get("status"):
+                return sync_result
         probe: dict[str, Any] | None = None
         if body.get("probe_google"):
             probe = probe_google_calendar(self._google_cfg())
@@ -187,6 +202,20 @@ class CalendarMixin:
         token = self.calendar_export_token()
         gcfg = self._google_cfg()
         gstatus = google_write_status(gcfg)
+        linked = sum(
+            1
+            for e in self.db.list_calendar_events(status="active", limit=500)
+            if e.external_id
+        )
+        msg = (sync_result or {}).get("message") or (
+            (
+                f"Google ready ({linked} linked). ICS subscribe/import still available as backup."
+                if gstatus["configured"]
+                else "Calendar ready — use ICS subscribe/import (easy), or connect Google for voice write."
+            )
+            if token else
+            "Calendar token missing; rotate to create one."
+        )
         return {
             "status": "ok",
             "export_token": token,
@@ -198,18 +227,59 @@ class CalendarMixin:
             "google_calendar_id": gcfg.calendar_id,
             "google_write": gstatus,
             "google_probe": probe,
+            "google_linked": linked,
+            "last_sync_detail": sync_result,
             "unified": self._unified_calendar_entries(),
             "proposals": proposals,
             "upcoming": upcoming,
-            "message": (
-                (
-                    "Calendar ready — subscribe + import ICS; voice also writes to Google."
-                    if gstatus["configured"]
-                    else "Calendar ready — subscribe with the export link; paste an ICS URL to import."
-                )
-                if token else
-                "Calendar token missing; rotate to create one."
-            ),
+            "message": msg,
+        }
+
+    def sync_calendar_voice(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Voice tool: push/pull the connected Google calendar. No calendar choice."""
+        del body
+        cfg = self._google_cfg()
+        if not cfg.configured:
+            return {
+                "error": "google not configured",
+                "speak_hint": (
+                    "Google Calendar is not connected yet. Ask family to finish Google setup "
+                    "on the Family page."
+                ),
+            }
+        result = self.sync_google_calendar()
+        if result.get("error") and not result.get("status"):
+            # Fall back to ICS import if Google fails but a backup feed is saved.
+            if self.calendar_import_url():
+                ics = self.sync_calendar_import()
+                if ics.get("status") == "ok":
+                    return {
+                        "status": "ok",
+                        "result": ics,
+                        "speak_hint": (
+                            "Google sync failed, so I refreshed the backup calendar link instead. "
+                            f"{ics.get('message', '')}"
+                        ).strip(),
+                    }
+            return {
+                "error": result["error"],
+                "speak_hint": f"I couldn't sync with Google Calendar. {result['error']}",
+            }
+        pushed = int(result.get("google_pushed_local") or 0)
+        pulled = int(result.get("companion_upserted") or 0)
+        updated = int(result.get("schedules_updated") or 0)
+        bits: list[str] = []
+        if pushed:
+            bits.append(f"sent {pushed} to Google")
+        if pulled:
+            bits.append(f"brought {pulled} from Google")
+        if updated:
+            bits.append(f"updated {updated} medicine time(s)")
+        detail = (", ".join(bits) + ".") if bits else "Everything looks in sync."
+        return {
+            "status": "ok",
+            "result": result,
+            "speak_hint": f"Okay — I synced your calendar. {detail}",
         }
 
     def _unified_calendar_entries(self) -> list[dict[str, Any]]:
@@ -459,8 +529,18 @@ class CalendarMixin:
             cancelled += 1
         return cancelled
 
+    def _retire_ics_import_companions(self) -> int:
+        """Cancel leftover ICS-import companions so Google is the only external feed."""
+        cancelled = 0
+        for ev in self.db.list_calendar_events(status="active", kind="companion", limit=500):
+            if ev.source != "import":
+                continue
+            self.db.set_calendar_event_status(ev.id, "cancelled")
+            cancelled += 1
+        return cancelled
+
     def _push_unsynced_local_to_google(self) -> int:
-        """Push active local companion + medicine mirrors that lack a Google event id."""
+        """Push active local + medicine mirrors that lack a Google event id."""
         cfg = self._google_cfg()
         if not cfg.configured:
             return 0
@@ -468,9 +548,12 @@ class CalendarMixin:
         for ev in self.db.list_calendar_events(status="active", limit=500):
             if ev.external_id:
                 continue
-            if ev.source not in {"local", ""} and not ev.uid.startswith("mb-med-"):
+            # Never re-push pure ICS-import leftovers; Google pull owns those.
+            if ev.source == "import":
                 continue
             if ev.kind not in {"companion", "medicine"}:
+                continue
+            if ev.source not in {"local", "google", ""} and not ev.uid.startswith("mb-med-"):
                 continue
             try:
                 body = build_google_event_body(

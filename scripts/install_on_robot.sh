@@ -11,13 +11,39 @@
 # Env:
 #   SKIP_PIP=1     only sync robot .env, do not pip install
 #   RESTART_APP=1  stop/start medicine_buddy via the robot HTTP API after install
+#
+# SSH password: asked once (ControlMaster multiplexes scp/rsync/ssh after that).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROBOT="${1:-reachy-mini.local}"
 REF="${2:-main}"
 
-trap 'echo "ERROR: install_on_robot.sh failed at line $LINENO (exit $?)." >&2' ERR
+CTRL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mb-ssh.XXXXXX")"
+CTRL_PATH="$CTRL_DIR/sock"
+SSH_BASE=( -o ControlMaster=auto -o "ControlPath=$CTRL_PATH" -o ControlPersist=120 )
+
+_cleanup_ssh() {
+  ssh -O exit -o "ControlPath=$CTRL_PATH" "pollen@$ROBOT" 2>/dev/null || true
+  rm -rf "$CTRL_DIR"
+}
+trap '_cleanup_ssh; echo "ERROR: install_on_robot.sh failed at line $LINENO (exit $?)." >&2' ERR
+trap '_cleanup_ssh' EXIT
+
+_ssh() {
+  # -t only when we need a TTY for password / pip progress on the first hop.
+  ssh -t "${SSH_BASE[@]}" "pollen@$ROBOT" "$@"
+}
+
+_scp() {
+  scp "${SSH_BASE[@]}" "$@"
+}
+
+_rsync() {
+  rsync -az --delete \
+    -e "ssh ${SSH_BASE[*]}" \
+    "$@"
+}
 
 _read_env_key() {
   # Always succeeds: missing keys → empty string (do not trip set -e / pipefail).
@@ -52,6 +78,10 @@ if [[ -n "${GOOGLE_CLIENT_ID}" && -n "${GOOGLE_REFRESH_TOKEN}" && -n "${GOOGLE_C
 else
   echo "Google Calendar write: incomplete in laptop .env (optional)"
 fi
+
+echo
+echo "SSH: enter the robot password ONCE — later steps reuse this connection."
+_ssh 'echo "ssh-ok"'
 
 sync_robot_env() {
   local frag
@@ -93,10 +123,8 @@ sync_robot_env() {
   fi
 
   echo "Syncing arm + Google env to pollen@$ROBOT:~/.local/share/medicine-buddy/.env ..."
-  echo "(SSH/SCP may ask for the robot password — type it when prompted.)"
-  # Do NOT feed a heredoc into ssh stdin: that steals the password prompt.
-  scp "$frag" "pollen@$ROBOT:/tmp/medicine_buddy_sync.env"
-  ssh -t "pollen@$ROBOT" 'bash -lc "
+  _scp "$frag" "pollen@$ROBOT:/tmp/medicine_buddy_sync.env"
+  _ssh 'bash -lc "
 set -euo pipefail
 DATA_DIR=\"\$HOME/.local/share/medicine-buddy\"
 ENV_FILE=\"\$DATA_DIR/.env\"
@@ -122,16 +150,16 @@ install_package() {
   fi
   if [[ "$REF" == "local" ]]; then
     echo "Uploading local apps/medicine_buddy to pollen@$ROBOT and pip-installing..."
-    ssh -t "pollen@$ROBOT" "rm -rf /tmp/medicine_buddy_pkg && mkdir -p /tmp/medicine_buddy_pkg"
-    rsync -az --delete \
+    _ssh "rm -rf /tmp/medicine_buddy_pkg && mkdir -p /tmp/medicine_buddy_pkg"
+    _rsync \
       --exclude '.venv' --exclude 'data/' --exclude '__pycache__' --exclude '.pytest_cache' \
       --exclude '*.egg-info' --exclude '.ruff_cache' \
       "$ROOT/apps/medicine_buddy/" "pollen@$ROBOT:/tmp/medicine_buddy_pkg/"
-    ssh -t "pollen@$ROBOT" "/venvs/apps_venv/bin/pip install --upgrade '/tmp/medicine_buddy_pkg'"
+    _ssh "/venvs/apps_venv/bin/pip install --upgrade '/tmp/medicine_buddy_pkg'"
   else
     SPEC="medicine_buddy @ git+https://github.com/tommasosommaruga/LosPollosForTheElders@${REF}#subdirectory=apps/medicine_buddy"
     echo "Installing '$SPEC' on pollen@$ROBOT ..."
-    ssh -t "pollen@$ROBOT" "/venvs/apps_venv/bin/pip install --upgrade '$SPEC'"
+    _ssh "/venvs/apps_venv/bin/pip install --upgrade '$SPEC'"
   fi
   echo "Package install finished."
 }

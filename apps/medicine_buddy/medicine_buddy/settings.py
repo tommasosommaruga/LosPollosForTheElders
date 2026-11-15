@@ -15,10 +15,17 @@ Protection of the page's endpoints (/settings/*):
 from __future__ import annotations
 
 import hmac
+import logging
+import os
 import secrets
 from typing import Any
 
 from medicine_buddy.auth import make_secret, normalize_phrase, validate_new_passphrase
+
+# Master switch: when off, schedule/memory/dispense changes need no spoken passphrase and
+# the voice guard is disabled. Code paths stay; flip this (or the Family page toggle) to re-enable.
+REQUIRE_PASSPHRASES_KEY = "require_passphrases"
+logger = logging.getLogger("medicine_buddy.settings")
 
 # Easy to say, easy for speech recognition, no sound-alikes (sea/see, two/to, knight/night).
 _ADJECTIVES = """
@@ -54,9 +61,48 @@ class SettingsMixin:
 
     def _init_settings(self) -> None:
         self.settings_token = secrets.token_urlsafe(24)
+        # Guard may be constructed before settings init; sync once both exist.
+        if getattr(self, "guard", None) is not None:
+            self.sync_passphrase_guardrails()
 
     def check_settings_token(self, token: str | None) -> bool:
         return bool(token) and hmac.compare_digest(str(token), self.settings_token)
+
+    def require_passphrases(self) -> bool:
+        """True = passphrase + voice-guard checks are on. DB setting wins over env."""
+        saved = self.db.get_setting(REQUIRE_PASSPHRASES_KEY)
+        if saved is not None and str(saved).strip() != "":
+            return str(saved).strip().lower() in {"1", "true", "yes", "on"}
+        # Default OFF for demos; set MEDICINE_BUDDY_REQUIRE_PASSPHRASES=1 to start locked down.
+        return os.environ.get("MEDICINE_BUDDY_REQUIRE_PASSPHRASES", "0").lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    def sync_passphrase_guardrails(self) -> bool:
+        """Apply the master switch to the voice guard. Returns the new enabled state."""
+        enabled = self.require_passphrases()
+        self.guard.enabled = enabled
+        logger.info("Passphrase guardrails %s", "ON" if enabled else "OFF")
+        return enabled
+
+    def settings_require_passphrases(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """GET-like report, or set `enabled` true/false from the Family settings page."""
+        body = body or {}
+        if "enabled" in body:
+            want = bool(body.get("enabled"))
+            self.db.set_setting(REQUIRE_PASSPHRASES_KEY, "1" if want else "0")
+            self.sync_passphrase_guardrails()
+        enabled = self.require_passphrases()
+        return {
+            "status": "ok",
+            "enabled": enabled,
+            "voice_guard": self.guard.enabled,
+            "message": (
+                "Passphrase checks are ON — medicine changes need a spoken passphrase."
+                if enabled else
+                "Passphrase checks are OFF — anyone can change schedules by voice (demo mode)."
+            ),
+        }
 
     def settings_suggest(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
         return {"passphrase": suggest_passphrase()}

@@ -232,6 +232,7 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         "register": "settings_register",
         "passphrase": "settings_change_passphrase",
         "timezone": "settings_timezone",
+        "require_passphrases": "settings_require_passphrases",
     }
 
     @app.post(PREFIX + "/settings/{name}")

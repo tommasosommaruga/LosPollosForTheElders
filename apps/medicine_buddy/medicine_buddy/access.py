@@ -124,6 +124,9 @@ class PeopleAccessMixin:
         self, action: str, body: dict[str, Any], allowed: Callable[[Person], bool], who: str
     ) -> dict[str, Any] | None:
         """None if someone allowed has proven themselves, else a refusal Reachy can read."""
+        # Master switch (Family settings / MEDICINE_BUDDY_REQUIRE_PASSPHRASES): off = no checks.
+        if not self.require_passphrases():
+            return None
         people = self.db.list_people()
         if not people:
             return None  # open mode: nobody registered yet

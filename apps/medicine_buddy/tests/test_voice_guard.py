@@ -31,6 +31,8 @@ def svc(tmp_path: Path, clock: Clock):
     catalog = MedicineCatalog({"Aspirin": ["asprin"], "Vitamin D": ["vit d"]})
     guard = VoiceGuard(catalog, enabled=True, clock=clock, grace=0.0)
     s = MedicineBuddyService(tmp_path / "g.db", AppConfig(dry_run=True, tray_labels=["ASPIRIN"]), catalog, guard)
+    # Master switch defaults off (demo); voice-guard tests need it on so speech checks run.
+    s.settings_require_passphrases({"enabled": True})
     yield s
     s.close()
 

@@ -64,6 +64,7 @@ def test_old_spoken_passphrase_stops_working_after_change(tmp_path: Path) -> Non
 
     cat = MedicineCatalog({"Aspirin": []})
     s = MedicineBuddyService(tmp_path / "g.db", AppConfig(dry_run=True), cat, VoiceGuard(cat, grace=0.0))
+    s.settings_require_passphrases({"enabled": True})
     s.voice_heard({"text": MARIO})
     s.voice_heard({"text": MARIO})
     s.register_person({"name": "Mario", "role": "person", "passphrase": MARIO, "passphrase_repeat": MARIO})
@@ -73,6 +74,34 @@ def test_old_spoken_passphrase_stops_working_after_change(tmp_path: Path) -> Non
                                   "new_repeat": "blue garden kettle"})
     s.voice_heard({"text": "add my aspirin at ten"})
     assert s.add_schedule({"person": "Mario", "name": "Aspirin", "weekdays": "daily", "time": "10:00"})["blocked"]
+    s.close()
+
+
+def test_require_passphrases_master_switch_disables_all_guardrails(tmp_path: Path) -> None:
+    """One Family-page setting turns every passphrase / voice-guard check off (code stays)."""
+    from medicine_buddy.voice_guard import VoiceGuard
+
+    cat = MedicineCatalog({"Aspirin": []})
+    s = MedicineBuddyService(
+        tmp_path / "m.db", AppConfig(dry_run=True), cat,
+        VoiceGuard(cat, enabled=True, grace=0.0),
+    )
+    assert s.require_passphrases() is False
+    assert s.guard.enabled is False  # sync on init forces off when master is off
+
+    # Enrol while unlocked (demo default), then lock down
+    assert s.register_person({"name": "Mario", "role": "person", "passphrase": MARIO,
+                              "passphrase_repeat": MARIO})["status"] == "ok"
+    on = s.settings_require_passphrases({"enabled": True})
+    assert on["enabled"] is True and on["voice_guard"] is True and s.guard.enabled is True
+    # With guardrails on and nobody spoken: schedule is blocked
+    assert s.add_schedule({"person": "Mario", "name": "Aspirin", "weekdays": "daily", "time": "09:00"})["blocked"]
+
+    off = s.settings_require_passphrases({"enabled": False})
+    assert off["enabled"] is False and off["voice_guard"] is False and s.guard.enabled is False
+    # Same call now succeeds without any passphrase
+    r = s.add_schedule({"person": "Mario", "name": "Aspirin", "weekdays": "daily", "time": "09:00"})
+    assert r.get("verified") and not r.get("blocked")
     s.close()
 
 

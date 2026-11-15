@@ -781,6 +781,7 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/settings/register": service.settings_register,
         "/settings/passphrase": service.settings_change_passphrase,
         "/settings/timezone": service.settings_timezone,
+        "/settings/require_passphrases": service.settings_require_passphrases,
     }
     loopback = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 

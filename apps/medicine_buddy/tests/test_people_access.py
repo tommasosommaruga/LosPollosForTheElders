@@ -27,6 +27,12 @@ MARIO = "old fishing boat"
 ROSA = "red garden roses"
 
 
+def _lock_down(svc: MedicineBuddyService, *, voice_guard: bool = False) -> None:
+    """Turn on the master passphrase switch (default is off for demos)."""
+    svc.settings_require_passphrases({"enabled": True})
+    svc.guard.enabled = voice_guard
+
+
 # ---------------------------------------------------------------- passphrase basics
 
 def test_normalize_and_find_in_speech() -> None:
@@ -68,6 +74,7 @@ def svc(tmp_path: Path):
         AppConfig(dry_run=True, tray_labels=["ASPIRIN"]),
         MedicineCatalog({"Aspirin": [], "Vitamin D": [], "Metformin": []}),
     )
+    _lock_down(s, voice_guard=False)  # passphrase-in-body checks (guard speech layer off)
     yield s
     s.close()
 
@@ -268,6 +275,7 @@ def gsvc(tmp_path: Path, clock: Clock):
     cat = MedicineCatalog({"Aspirin": []})
     s = MedicineBuddyService(tmp_path / "gp.db", AppConfig(dry_run=True, tray_labels=["ASPIRIN"]), cat,
                              VoiceGuard(cat, enabled=True, clock=clock, grace=0.0))
+    _lock_down(s, voice_guard=True)
     yield s
     s.close()
 

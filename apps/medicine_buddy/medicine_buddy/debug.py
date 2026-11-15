@@ -127,6 +127,7 @@ class DebugMixin:
                 "catalog_size": len(self.catalog.names),
             },
             "voice_guard": {
+                "require_passphrases": self.require_passphrases(),
                 "enabled": g.enabled,
                 "utterances_heard": len(g._heard),
                 "seconds_since_last_speech": g.seconds_since_speech(),

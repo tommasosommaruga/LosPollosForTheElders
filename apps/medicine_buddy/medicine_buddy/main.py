@@ -111,6 +111,9 @@ class MedicineBuddy(ReachyMiniApp):
     # debug). Pollen's voice & language settings stay at "/" on the same server.
     custom_app_url = "http://0.0.0.0:7860/medicine"
     dont_start_webserver = False
+    # Override via REACHY_MINI_MEDIA_BACKEND or --media-backend (e.g. no_media on a Mac
+    # where GStreamer/WebRTC is broken). None = SDK "default".
+    request_media_backend = os.environ.get("REACHY_MINI_MEDIA_BACKEND") or None
 
     def __init__(self, *args, **kwargs) -> None:
         conversation.start_import_warmup()  # preload heavy imports while the robot connects
@@ -157,8 +160,8 @@ class MedicineBuddy(ReachyMiniApp):
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
         logger.info("In-app pages (sign in with the caregiver passphrase): http://<this-machine>:7860/medicine")
         logger.info(
-            "Database: %s  |  voice guard: %s  |  wake greeting: %s  |  profile: %s (locked)",
-            db_path, guard, wake_on, PROFILE,
+            "Database: %s  |  require passphrases: %s  |  voice guard: %s  |  wake greeting: %s  |  profile: %s (locked)",
+            db_path, service.require_passphrases(), service.guard.enabled, wake_on, PROFILE,
         )
         try:
             self._run_conversation(reachy_mini, stop_event)
@@ -185,9 +188,25 @@ def _pop_option(name: str) -> str | None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
     robot_host = _pop_option("--host") or os.environ.get("REACHY_HOST")
+    media_backend = _pop_option("--media-backend") or os.environ.get("REACHY_MINI_MEDIA_BACKEND")
+    if media_backend:
+        MedicineBuddy.request_media_backend = media_backend
+    elif robot_host and sys.platform == "darwin":
+        # Laptop → wireless robot: Mac GStreamer/WebRTC often crashes (_gst_structure_is_writable).
+        # no_media gets the app running; reinstall on the robot for full robot mic/speaker AV.
+        MedicineBuddy.request_media_backend = "no_media"
+        logging.getLogger("medicine_buddy.app").warning(
+            "macOS + --host: using media backend 'no_media' (GStreamer WebRTC is broken on many Macs). "
+            "Set REACHY_MINI_MEDIA_BACKEND=default to try the normal path, or run the app on the robot."
+        )
     app = MedicineBuddy()
     try:
-        # On the robot the daemon is local and no host is needed; from a laptop pass the robot's IP.
-        app.wrapped_run(**({"host": robot_host} if robot_host and not app.daemon_on_localhost else {}))
+        # From a laptop, always pass the robot host and force network mode — a leftover local
+        # reachy-mini on :8000 must not hijack the connection (that caused localhost WebRTC).
+        run_kwargs: dict = {}
+        if robot_host:
+            run_kwargs["host"] = robot_host
+            app.daemon_on_localhost = False
+        app.wrapped_run(**run_kwargs)
     except KeyboardInterrupt:
         app.stop()

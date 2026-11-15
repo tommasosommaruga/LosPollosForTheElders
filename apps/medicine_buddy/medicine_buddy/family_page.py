@@ -75,6 +75,18 @@ Passphrases you type on this page never pass through Reachy's AI and are stored 
 fingerprint. This page works only on this computer.
 </div></div>
 
+<section class="panel" id="guardpanel">
+  <h2>Passphrase guardrails</h2>
+  <p class="hint" id="guard-status">Loading&hellip;</p>
+  <p class="hint">When off, Reachy will change schedules and memories by voice without hearing a passphrase
+  (useful for demos). The passphrase code stays in place &mdash; turn this on to lock changes again.</p>
+  <div class="row" style="margin-top:10px">
+    <button class="primary" type="button" id="guard-on">Require passphrases</button>
+    <button type="button" id="guard-off">Disable for now</button>
+  </div>
+  <div class="msg" id="guard-msg"></div>
+</section>
+
 <section class="panel" id="tzpanel">
   <h2>Clock &amp; time zone</h2>
   <p class="hint" id="tz-now">Loading&hellip;</p>
@@ -240,6 +252,32 @@ $("ad-save").addEventListener("click", async () => {
   } else msg($("ad-msg"), r.error, false);
 });
 
+function showGuard(r) {
+  $("guard-status").textContent = r.message || (r.enabled
+    ? "Passphrase checks are ON."
+    : "Passphrase checks are OFF (demo mode).");
+  $("guard-on").disabled = !!r.enabled;
+  $("guard-off").disabled = !r.enabled;
+}
+
+async function loadGuard() {
+  const r = await api("/settings/require_passphrases", {});
+  if (r.status === "ok") showGuard(r);
+  else $("guard-status").textContent = r.error || "Could not read passphrase setting.";
+}
+
+async function setGuard(enabled) {
+  clearMsg($("guard-msg"));
+  const r = await api("/settings/require_passphrases", {enabled: enabled});
+  if (r.status === "ok") {
+    showGuard(r);
+    msg($("guard-msg"), r.message, true);
+  } else msg($("guard-msg"), r.error || "Could not save.", false);
+}
+
+$("guard-on").addEventListener("click", () => setGuard(true));
+$("guard-off").addEventListener("click", () => setGuard(false));
+
 const deviceZone = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return ""; } })();
 
 function showTz(r) {
@@ -267,5 +305,6 @@ $("tz-use-device").addEventListener("click", () => saveTz(deviceZone));
 $("tz-save").addEventListener("click", () => saveTz($("tz-input").value.trim()));
 
 loadPeople();
+loadGuard();
 loadTz();
 </script></body></html>"""

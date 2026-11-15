@@ -84,6 +84,8 @@ def _nav(active: str, who: str) -> str:
     return (
         '<div style="font-size:14px;font-weight:500;margin:6px 0 2px">'
         + link(PREFIX, "Dashboard", "dash")
+        + link(f"{PREFIX}/conversation", "Conversation", "conv")
+        + link(f"{PREFIX}/data", "Database", "data")
         + link(f"{PREFIX}/history", "History", "history")
         + link(f"{PREFIX}/family", "Family &amp; passphrases", "family")
         + link(f"{PREFIX}/debug", "Debug", "debug")
@@ -251,6 +253,39 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         track(request, status, start, payload)
         return JSONResponse(payload, status)
 
+    # ------------------------------------------------------------------ conversation + database
+    @app.get(f"{PREFIX}/conversation")
+    def conversation_page(request: Request):
+        s = session_for(request)
+        if s is None:
+            return RedirectResponse(PREFIX, status_code=303)
+        return html(_conversation_page(s["csrf"], _nav("conv", s["who"])))
+
+    @app.get(f"{PREFIX}/conversation/data")
+    def conversation_data(request: Request, after: int = 0):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return JSONResponse(service.transcript_snapshot(after), headers=headers())
+
+    @app.post(f"{PREFIX}/conversation/clear")
+    async def conversation_clear(request: Request):
+        _, denied = need_change_rights(request)
+        if denied is not None:
+            return denied
+        return JSONResponse(service.clear_transcript())
+
+    @app.get(f"{PREFIX}/data")
+    def database_page(request: Request):
+        s = session_for(request)
+        if s is None:
+            return RedirectResponse(PREFIX, status_code=303)
+        return html(_database_page(_nav("data", s["who"])))
+
+    @app.get(f"{PREFIX}/data/tables")
+    def database_data(request: Request):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return JSONResponse(service.database_snapshot(), headers=headers())
     # ------------------------------------------------------------------ history / explorer
     @app.get(f"{PREFIX}/history")
     def history_page(request: Request):
@@ -425,6 +460,97 @@ document.getElementById("f").addEventListener("submit", async e => {{
   else {{ const d = await r.json().catch(() => ({{}})); document.getElementById("m").textContent = d.error || "Sign-in failed"; }}
 }});
 </script></body></html>"""
+
+
+_COMMON_JS = """
+const $ = id => document.getElementById(id);
+function td(text, cls) { const c = document.createElement("td"); c.textContent = text == null ? "" : String(text); if (cls) c.className = cls; return c; }
+"""
+
+
+def _conversation_page(csrf: str, nav: str) -> str:
+    return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1"><title>Medicine Buddy - conversation</title>
+<style>{_BASE_CSS}
+#chat{{display:flex;flex-direction:column;gap:8px;max-height:62vh;overflow-y:auto;padding:4px}}
+.msg{{max-width:80%;padding:9px 13px;border-radius:14px;white-space:pre-wrap;word-break:break-word}}
+.msg small{{display:block;color:var(--muted);font-size:11px;margin-bottom:2px}}
+.reachy{{align-self:flex-start;background:var(--soft);border:1px solid var(--line)}}
+.person{{align-self:flex-end;background:var(--card);border:1px solid var(--line)}}
+</style></head><body><main>
+<h1>Conversation</h1>{nav}
+<p class=muted>Live: what the person said and what Reachy answered. Kept in memory only (last 200 lines),
+never saved to the database or logs, and gone when the app restarts. Spoken passphrases are hidden.</p>
+<section>
+  <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+    <label class=switch><input type=checkbox id=follow checked> <span>Follow newest</span></label>
+    <button id=clear>Clear</button></div>
+  <div id=chat><p class=muted id=empty>Nothing said yet. Say &ldquo;Hey Reachy&rdquo;.</p></div>
+</section>
+<script>
+const TOKEN = {json.dumps(csrf)}; const P = {json.dumps(PREFIX)};
+{_COMMON_JS}
+let last = 0; const seen = new Map();
+async function poll() {{
+  const r = await fetch(P + "/conversation/data?after=0", {{cache: "no-store"}});
+  if (r.status === 401) {{ location.href = P; return; }}
+  const d = await r.json(); const chat = $("chat");
+  if (d.last_id < last) {{ chat.replaceChildren(); seen.clear(); }}
+  last = d.last_id;
+  for (const l of d.lines) {{
+    let el = seen.get(l.id);
+    if (!el) {{ el = document.createElement("div"); el.className = "msg " + l.who;
+      el.append(document.createElement("small"), document.createElement("span")); seen.set(l.id, el); chat.append(el); }}
+    el.firstChild.textContent = (l.who === "reachy" ? "Reachy" : "Person") + " - " + l.time;
+    el.lastChild.textContent = l.text;
+  }}
+  if (d.lines.length) {{ const e = $("empty"); if (e) e.remove(); if ($("follow").checked) chat.scrollTop = chat.scrollHeight; }}
+}}
+$("clear").addEventListener("click", async () => {{
+  await fetch(P + "/conversation/clear", {{method: "POST", headers: {{"X-Family-Token": TOKEN}}}}); seen.clear(); $("chat").replaceChildren(); last = 0; poll(); }});
+poll(); setInterval(poll, 2000);
+</script></main></body></html>"""
+
+
+def _database_page(nav: str) -> str:
+    return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1"><title>Medicine Buddy - database</title>
+<style>{_BASE_CSS}
+.tabs button{{margin:0 6px 6px 0}} .tabs button.on{{background:var(--accent);color:#fff;border-color:var(--accent)}}
+td{{white-space:pre-wrap;word-break:break-word}}
+</style></head><body><main>
+<h1>Database</h1>{nav}
+<p class=muted>Read-only view of everything stored on this machine. Changes are made by voice or on the Family page.
+Passphrases are stored only as salted hashes and are never shown.</p>
+<section><div class=kv id=info></div></section>
+<section><div class=tabs id=tabs></div><p class=muted id=note></p>
+<table><thead id=head></thead><tbody id=body></tbody></table></section>
+<script>
+const P = {json.dumps(PREFIX)};
+{_COMMON_JS}
+let data = null, cur = "medicines";
+try {{ cur = localStorage.getItem("mb_table") || cur; }} catch (e) {{}}
+function show() {{
+  const t = data.tables.find(x => x.name === cur) || data.tables[0]; cur = t.name;
+  $("tabs").replaceChildren(...data.tables.map(x => {{ const b = document.createElement("button");
+    b.textContent = x.name + " (" + x.rows.length + ")"; if (x.name === cur) b.className = "on";
+    b.onclick = () => {{ cur = x.name; try {{ localStorage.setItem("mb_table", cur); }} catch (e) {{}} show(); }}; return b; }}));
+  $("note").textContent = t.note || "";
+  const hr = document.createElement("tr"); t.columns.forEach(c => {{ const h = document.createElement("th"); h.textContent = c; hr.append(h); }});
+  $("head").replaceChildren(hr);
+  if (!t.rows.length) {{ const tr = document.createElement("tr"); const c = td("Empty.", "muted"); c.colSpan = t.columns.length; tr.append(c); $("body").replaceChildren(tr); return; }}
+  $("body").replaceChildren(...t.rows.map(r => {{ const tr = document.createElement("tr"); r.forEach(v => tr.append(td(v))); return tr; }}));
+}}
+async function load() {{
+  const r = await fetch(P + "/data/tables", {{cache: "no-store"}});
+  if (r.status === 401) {{ location.href = P; return; }}
+  data = await r.json();
+  $("info").replaceChildren(...[["file", data.path], ["size", data.size_bytes == null ? "-" : Math.round(data.size_bytes / 1024) + " KB"]].map(([k, v]) => {{
+    const d = document.createElement("div"), a = document.createElement("span"), b = document.createElement("span"); a.textContent = k; b.textContent = v; d.append(a, b); return d; }}));
+  show();
+}}
+load(); setInterval(load, 5000);
+</script></main></body></html>"""
 
 
 def _debug_page(csrf: str, nav: str) -> str:

@@ -156,3 +156,39 @@ def test_starting_page_instead_of_404() -> None:
         r = c.get("/medicine")
         assert r.status_code == 503 and "starting" in r.text
         assert c.get("/medicine/debug/data").status_code == 503
+
+
+def test_conversation_page_shows_text_and_hides_passphrases(svc, client: TestClient) -> None:
+    _family(svc)
+    _login(client)
+    svc.record_transcript("user", "what medicine should I take")
+    svc.record_transcript("assistant", "You take Aspirin at nine.")
+    svc.record_transcript("user", f"my passphrase is {MARIO}")
+    page = client.get("/medicine/conversation")
+    assert page.status_code == 200 and "Conversation" in page.text
+    texts = []
+    for _ in range(3):                       # unchecked lines show "..." until checked (few per request)
+        d = client.get("/medicine/conversation/data").json()
+        texts = [(ln["who"], ln["text"]) for ln in d["lines"]]
+    assert ("person", "what medicine should I take") in texts
+    assert ("reachy", "You take Aspirin at nine.") in texts
+    assert ("person", "[passphrase hidden]") in texts
+    assert MARIO not in json.dumps(d) and MARIO not in json.dumps(svc._tlines.copy().__repr__())
+    tok = _token(client, "/medicine/conversation")
+    assert client.post("/medicine/conversation/clear").status_code == 403            # needs the page token
+    assert client.post("/medicine/conversation/clear", headers={"X-Family-Token": tok}).status_code == 200
+    assert client.get("/medicine/conversation/data").json()["lines"] == []
+
+
+def test_database_page_read_only_no_secrets(svc, client: TestClient) -> None:
+    _family(svc)
+    assert client.get("/medicine/data/tables").status_code == 401
+    _login(client)
+    assert "Database" in client.get("/medicine/data").text
+    d = client.get("/medicine/data/tables").json()
+    names = {t["name"] for t in d["tables"]}
+    assert {"people", "medicines", "schedules", "dose_events", "memories", "app_settings"} <= names
+    blob = json.dumps(d).lower()
+    assert "pass_hash" not in blob and "pass_salt" not in blob and CARE not in blob and MARIO not in blob
+    sched = next(t for t in d["tables"] if t["name"] == "schedules")["rows"]
+    assert any(r[1] == "Mario" and r[2] == "Aspirin" for r in sched)

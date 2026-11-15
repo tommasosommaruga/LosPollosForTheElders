@@ -28,6 +28,7 @@ from medicine_buddy.dry_run import FakeAdherence, FakeArm, FakeVision
 from medicine_buddy.orchestrator import DoseStateMachine
 from medicine_buddy.scheduler import find_due_doses
 from medicine_buddy.silent_buddy import SilentBuddy
+from medicine_buddy.transcript import TranscriptMixin
 from medicine_buddy.voice_guard import VoiceGuard
 from medicine_buddy.voice_setup import (
     describe_time,
@@ -49,7 +50,7 @@ def _whose(person: Person | None) -> str:
     return f" for {person.name}" if person else ""
 
 
-class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMixin):
+class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMixin, TranscriptMixin):
     def __init__(
         self,
         db_path: Path,
@@ -67,6 +68,7 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMi
         self._lock = threading.Lock()  # serializes multi-step operations
         self._init_settings()
         self._init_debug()
+        self._init_transcript()
 
     def family_page(self) -> str:
         return render_family_page(self.settings_token)

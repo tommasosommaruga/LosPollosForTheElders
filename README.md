@@ -229,13 +229,29 @@ reachy-mini-app-assistant check apps/medicine_buddy      # validate the app pack
   ("the arm is only simulated... please take it from your own box") instead of claiming it brought the
   medicine, and the pages show a DEMO MODE banner.
 
-### In-app pages: dashboard, history, family settings, debug
+### In-app pages: dashboard, history, conversation, database, family settings, debug
 
 When Medicine Buddy runs, Reachy Mini Control opens **`http://<robot>:7860/medicine`** (from a laptop run:
 http://127.0.0.1:7860/medicine). Sign in with the **caregiver's passphrase** (typed; open while nobody is
-registered; any family member's while there is no caregiver yet). Then:
+registered; any family member's while there is no caregiver yet).
+
+**Open it from your computer over Wi-Fi (no SSH needed):** put the laptop on the same Wi-Fi as the robot,
+start Medicine Buddy in Reachy Mini Control, then browse to `http://reachy-mini.local:7860/medicine`
+(or the robot's IP, e.g. `http://172.20.10.5:7860/medicine`). Not `/index.html`: that is a 404.
+If the network blocks device-to-device traffic, use a phone hotspot, or forward the port over SSH
+(leave the window open, then browse to http://localhost:7860/medicine):
+
+```bash
+ssh -L 7860:localhost:7860 pollen@reachy-mini.local
+```
+
+SSH is only for installing/updating the app (section 3a). Pages you see:
 
 - **Dashboard** - people, schedules, due now, family memories, dose log, security.
+- **Conversation** - live text of what the person said and what Reachy answered (every 2 s). Kept in
+  memory only (last 200 lines, never in the database or logs, gone on restart); spoken passphrases are hidden.
+- **Database** - read-only view of every table (people, medicines, schedules, dose events, memories,
+  settings) with file path and size. Passphrases are never shown, only stored as salted hashes.
 - **History** - agent activity timeline (cursor refresh), cross-entity search (people / stories /
   doses / medicines / activity), per-person dossiers, record detail pages, and adherence reports
   (7/30 days). Backed by SQLite (`activity_events` + existing tables). Person filters use **exact**

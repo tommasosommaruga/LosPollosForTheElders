@@ -22,6 +22,7 @@ _FILLER = {
     "capsule", "capsules", "medicine", "medicines", "medication", "meds", "dose",
 }
 FUZZY_CUTOFF = 0.8
+MAX_SPOKEN_NAMES = 30  # above this the "medicines I know" hint is not read out
 
 
 def _normalize(text: str) -> str:
@@ -95,6 +96,9 @@ class MedicineCatalog:
             return f"I'm not sure which medicine you mean by '{spoken}'. Did you mean {_or_list(result.suggestions)}?"
         if result.suggestions:
             return f"'{spoken}' is not on the medicine list. Did you mean {_or_list(result.suggestions)}?"
+        if len(self.names) > MAX_SPOKEN_NAMES:  # big (Swiss) catalog: never read hundreds of names aloud
+            return (f"'{spoken}' is not on the medicine list. Please say the name printed on the box, "
+                    f"or ask a family member to add it.")
         return (f"'{spoken}' is not on the medicine list. "
                 f"The medicines I know are: {', '.join(self.names)}.")
 

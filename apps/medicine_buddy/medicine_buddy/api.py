@@ -590,7 +590,10 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMi
             for e in events
         ) or "<tr><td colspan=4 class=muted>No doses yet.</td></tr>"
 
-        chips = "".join(f"<span class=chip>{esc(n)}</span>" for n in self.catalog.names)
+        shown = self.catalog.names[:40]  # the Swiss catalog has ~1,500 names: don't render them all
+        chips = "".join(f"<span class=chip>{esc(n)}</span>" for n in shown)
+        if len(self.catalog.names) > len(shown):
+            chips += f"<span class=chip>+{len(self.catalog.names) - len(shown)} more</span>"
         mode = ("DEMO MODE - the arm is simulated, nothing is really dispensed"
                 if self.config.dry_run else "hardware")
 

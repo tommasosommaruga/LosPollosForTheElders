@@ -157,7 +157,9 @@ class MedicineBuddy(ReachyMiniApp):
             ui_port = urlparse(self.custom_app_url).port or 7860
             speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")   # waits until Reachy is idle
             speaker.start()
-            reminders = ReminderLoop(service, speaker)
+            interrupt = os.environ.get("MEDICINE_BUDDY_REMINDER_INTERRUPT", "1").lower() not in {
+                "0", "false", "no", "off"}
+            reminders = ReminderLoop(service, speaker, interrupt=interrupt)
             service.reminder_loop = reminders   # shown on the debug page
             reminders.start()
         if os.environ.get("MEDICINE_BUDDY_CHECKINS", "1").lower() not in {"0", "false", "no", "off"}:

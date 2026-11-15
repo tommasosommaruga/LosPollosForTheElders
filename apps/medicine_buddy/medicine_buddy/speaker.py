@@ -22,12 +22,12 @@ logger = logging.getLogger("medicine_buddy.speaker")
 BUSY_STATES = {"listening", "thinking", "speaking"}
 
 
-def _say_once(url: str, text: str, timeout: float = 10.0) -> bool:
-    """One conversation.say call on a fresh connection. True when the app accepted it."""
+def _rpc_call(url: str, method: str, params: dict[str, Any], timeout: float = 10.0) -> bool:
+    """One JSON-RPC call on a fresh connection. True when the app accepted it."""
     from websockets.sync.client import connect
 
     request_id = 1
-    message = {"jsonrpc": "2.0", "id": request_id, "method": "conversation.say", "params": {"text": text}}
+    message = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
     try:
         with connect(url, open_timeout=3, close_timeout=2) as ws:
             ws.send(json.dumps(message))
@@ -35,18 +35,26 @@ def _say_once(url: str, text: str, timeout: float = 10.0) -> bool:
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    logger.warning("conversation.say: no answer within %.0fs", timeout)
+                    logger.warning("%s: no answer within %.0fs", method, timeout)
                     return False
                 reply = json.loads(ws.recv(timeout=remaining))
                 if reply.get("id") != request_id:      # notifications (turn / transcript ...) are not ours
                     continue
                 if "error" in reply:
-                    logger.info("conversation.say refused: %s", (reply["error"] or {}).get("message"))
+                    logger.info("%s refused: %s", method, (reply["error"] or {}).get("message"))
                     return False
                 return True
     except Exception as exc:  # noqa: BLE001 - not reachable / not ready: the caller retries
-        logger.debug("conversation.say failed: %s", exc)
+        logger.debug("%s failed: %s", method, exc)
         return False
+
+
+def _say_once(url: str, text: str, timeout: float = 10.0) -> bool:
+    return _rpc_call(url, "conversation.say", {"text": text}, timeout)
+
+
+def _interrupt_once(url: str, timeout: float = 5.0) -> bool:
+    return _rpc_call(url, "conversation.interrupt", {}, timeout)
 
 
 def make_rpc_speaker(url: str = "ws://127.0.0.1:7860/rpc", timeout: float = 10.0) -> Callable[[str], bool]:
@@ -160,6 +168,28 @@ class RpcSpeaker:
         if not _say_once(self.url, text, self.timeout):
             return False
         with self._lock:                               # busy until the app's own events say otherwise
+            self.state, self.last_event = "thinking", self._clock()
+        return True
+
+    def speak_urgent(self, text: str) -> bool:
+        """Speak NOW, cutting in on Reachy and the person (medicine reminders).
+
+        If Reachy is talking or thinking, its reply is stopped first with the app's own
+        `conversation.interrupt` (the same as when the person talks over it); the app then
+        queues our line after the cancelled reply. The only thing we wait for is a tool call
+        that is still running: cutting in then makes the speech service reject the reply."""
+        with self._lock:
+            quiet_for = self._clock() - self.last_event
+            stale = quiet_for >= self.stale_after
+            if self.pending_tools > 0 and not stale:
+                logger.debug("Tool call running; urgent line waits for its result")
+                return False
+            busy = self.state in BUSY_STATES and not stale
+        if busy:
+            _interrupt_once(self.url)          # best effort: if it fails, say() still queues the line
+        if not _say_once(self.url, text, self.timeout):
+            return False
+        with self._lock:
             self.state, self.last_event = "thinking", self._clock()
         return True
 

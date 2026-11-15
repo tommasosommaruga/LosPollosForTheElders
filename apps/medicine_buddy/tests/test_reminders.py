@@ -120,8 +120,16 @@ def test_a_broken_speaker_does_not_break_the_loop(parts) -> None:
     assert len(loop.tick(at(9, 1))) == 1 and loop.status()["last_error"] is None
 
 
-def test_never_interrupts_a_conversation(parts) -> None:
+def test_interrupts_a_conversation_by_default(parts) -> None:
     svc, loop, speaker, clock = parts
+    svc.voice_heard({"text": "hello Reachy, how are you"})          # someone is talking right now
+    out = loop.tick(at(9, 0))
+    assert len(out) == 1 and "take their Aspirin now" in out[0]      # cuts in and tells them to take it
+
+
+def test_polite_mode_waits_for_a_pause(parts) -> None:
+    svc, loop, speaker, clock = parts
+    loop.interrupt = False
     svc.voice_heard({"text": "hello Reachy, how are you"})          # someone is talking right now
     assert loop.tick(at(9, 0)) == []
     clock.t += 25                                                    # 25 s of silence
@@ -202,6 +210,11 @@ def rpc_server():
 
     rpc, app = JsonRpcServer(), FastAPI()
     state = {"connected": True, "said": [], "rpc": rpc}
+
+    @rpc.method("conversation.interrupt")
+    async def interrupt(params):
+        state["said"].append("<interrupt>")
+        return {"ok": True}
 
     @rpc.method("conversation.say")
     async def say(params):
@@ -372,10 +385,10 @@ def test_unreachable_app_is_not_a_crash() -> None:
     sp.stop()
 
 
-def test_reminder_loop_retries_when_reachy_is_busy(parts, watcher) -> None:
+def test_polite_loop_retries_when_reachy_is_busy(parts, watcher) -> None:
     svc, loop, _, _ = parts
     sp, state = watcher
-    loop.speak = sp
+    loop.speak, loop.interrupt = sp, False
     state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "thinking"})
     assert _wait(lambda: sp.state == "thinking")
     assert loop.tick(at(9, 0)) == [] and state["said"] == []      # busy: nothing sent, nothing counted
@@ -384,3 +397,43 @@ def test_reminder_loop_retries_when_reachy_is_busy(parts, watcher) -> None:
     assert _wait(lambda: sp.state == "ready" and sp.is_idle())
     assert len(loop.tick(at(9, 1))) == 1 and len(state["said"]) == 1
     assert loop.status()["conversation"]["watching"] is True
+
+
+def test_interrupting_loop_cuts_in_on_a_busy_reachy(parts, watcher) -> None:
+    svc, loop, _, _ = parts
+    sp, state = watcher
+    loop.speak = sp
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "speaking"})
+    assert _wait(lambda: sp.state == "speaking")
+    assert len(loop.tick(at(9, 0))) == 1
+    assert state["said"][0] == "<interrupt>" and "Aspirin" in state["said"][1]
+
+
+@pytest.mark.parametrize("busy", ["thinking", "speaking", "listening"])
+def test_urgent_line_interrupts_reachy_then_speaks(watcher, busy: str) -> None:
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": busy})
+    assert _wait(lambda: sp.state == busy)
+    assert sp.speak_urgent("take your aspirin") is True
+    assert state["said"] == ["<interrupt>", "take your aspirin"]
+
+
+def test_urgent_line_when_idle_does_not_interrupt(watcher) -> None:
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    assert _wait(lambda: sp.state == "ready")
+    assert sp.speak_urgent("take your aspirin") is True and state["said"] == ["take your aspirin"]
+
+
+def test_urgent_line_still_waits_for_a_running_tool_call(watcher) -> None:
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.activity", {"reason": "tool_call_received"})
+    assert _wait(lambda: sp.pending_tools == 1)
+    assert sp.speak_urgent("take your aspirin") is False and state["said"] == []
+
+
+def test_loop_uses_the_urgent_path(parts) -> None:
+    svc, loop, speaker, _ = parts
+    used: list[str] = []
+    speaker.speak_urgent = lambda text: used.append(text) or True
+    assert len(loop.tick(at(9, 0))) == 1 and len(used) == 1 and speaker.said == []

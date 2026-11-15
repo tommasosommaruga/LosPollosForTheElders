@@ -217,11 +217,13 @@ reachy-mini-app-assistant check apps/medicine_buddy      # validate the app pack
 
 ### Reminders, time zone and demo mode
 
-- **Reachy reminds by itself.** A background check runs every 30 seconds. When a dose is due, Reachy
-  speaks up (through the conversation app) and asks whether to bring it or whether it was already taken.
-  It repeats every 10 minutes, up to 3 times. It waits until Reachy is idle: never while someone is talking to it, while Reachy is thinking or speaking, or while a tool call (e.g. a web search) is still running. If nobody answers
-  within an hour the dose is recorded as **Missed** (visible on the dashboard). Switch off with
-  `MEDICINE_BUDDY_REMINDERS=0`.
+- **Reachy reminds by itself, and cuts in.** A background check runs every 30 seconds. At the scheduled
+  time Reachy speaks up even in the middle of a conversation: it stops what it is saying, says sorry, and
+  tells the person to take the medicine now, then asks them to say when they have taken it. The only thing
+  it waits for is a running tool call (e.g. a web search), a few seconds at most. It repeats every 10
+  minutes, up to 3 times. If nobody answers within an hour the dose is recorded as **Missed** (visible on
+  the dashboard). `MEDICINE_BUDDY_REMINDER_INTERRUPT=0` = polite mode (waits until nobody is talking).
+  Switch reminders off with `MEDICINE_BUDDY_REMINDERS=0`.
 - **Wake greeting** — when the app starts, Reachy says a short hello and which medicines are due in the next 30 minutes (real schedules). Turn off with `MEDICINE_BUDDY_WAKE_GREETING=0`.
 - **Set the time zone once** on the Family settings page ("Clock & time zone", one click for your device's zone)
   or with `MEDICINE_BUDDY_TZ=Europe/Zurich`. The robot's own clock is usually UTC, so without this a 9 AM

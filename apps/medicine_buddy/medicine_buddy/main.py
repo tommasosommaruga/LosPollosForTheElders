@@ -158,9 +158,13 @@ class MedicineBuddy(ReachyMiniApp):
             ui_port = urlparse(self.custom_app_url).port or 7860
             speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")   # waits until Reachy is idle
             speaker.start()
+            # Default OFF: wake_up/enable_motors from the reminder thread races the conversation
+            # app's daemon WebSocket and can raise ConnectionError ("Lost connection with the
+            # server") and kill the whole app. Opt in with MEDICINE_BUDDY_WAKE_ROBOT=1 only after
+            # verifying reminders on a quiet robot.
             waker = None
-            if os.environ.get("MEDICINE_BUDDY_WAKE_ROBOT", "1").lower() not in {"0", "false", "no", "off"}:
-                waker = make_waker(reachy_mini)   # wake from the sleep pose when a dose is due
+            if os.environ.get("MEDICINE_BUDDY_WAKE_ROBOT", "0").lower() in {"1", "true", "yes", "on"}:
+                waker = make_waker(reachy_mini)
             reminders = ReminderLoop(service, speaker, wake=waker)
             service.reminder_loop = reminders   # shown on the debug page
             reminders.start()

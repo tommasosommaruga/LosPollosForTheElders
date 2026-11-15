@@ -3,6 +3,11 @@
 If Reachy is in its sleep pose (head down, motors off) it is woken with the SDK's own wake-up
 movement before it speaks, so the person sees and hears it come alive at the scheduled time.
 An awake robot is left alone. Never raises: a failed wake-up must not stop the reminder.
+
+Thread safety: reminders run on a background thread while the conversation app owns the same
+ReachyMini daemon WebSocket on the main thread. Concurrent ``enable_motors`` / ``wake_up`` can
+drop that socket (``ConnectionError: Lost connection with the server``) and exit the app.
+``MEDICINE_BUDDY_WAKE_ROBOT`` therefore defaults to off in ``main.py``.
 """
 
 from __future__ import annotations

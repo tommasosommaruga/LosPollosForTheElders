@@ -83,6 +83,12 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 
 - Reverted to pre-`0ab191f` (dropped nav + wake-robot); kept ICS UTC/TZID fix
 
+## v0.9.3 — schedule/calendar due → arm grab automation (done)
+
+- ReminderLoop asks “should I bring it?” and tells the model to call `dispense_medicine` after yes
+- Primes VoiceGuard `dispense:{id}` so spoken yes can authorize the JSON POST to the arm
+- Still never moves the arm without confirm (schedules drive due; calendar medicine rows mirror schedules)
+
 ## v0.9.2 — arm listener + speak/log POST (done)
 
 - `integrations/arm/arm_listener.py` for arm PC (hooks: `run_dispense` / `run_check_taken` / `run_move_object`)

@@ -1,17 +1,15 @@
-"""Proactive reminders: Reachy speaks up when a dose is due, without being asked.
+"""Proactive reminders: schedule/calendar due → ask to bring → arm grab after yes.
 
-A background loop checks the schedules every `interval` seconds:
-- a dose that is due (its time has come, not taken/skipped yet) gets a spoken reminder,
-- repeated every `repeat_after` seconds, up to `max_reminders` times,
-- if the window runs out with no answer it is recorded as Missed (visible on the dashboard).
+A background loop checks medicine schedules every `interval` seconds (calendar
+medicine rows mirror those schedules). When a dose is due:
+- Reachy asks whether to bring the medicine (arm JSON POST via dispense_medicine),
+- VoiceGuard dispense confirm is primed so a spoken yes can authorize the grab,
+- reminders repeat every `repeat_after` up to `max_reminders`,
+- unanswered window end → Missed on the dashboard.
 
-Speaking goes through a `speak(text) -> bool` callable (in the app: the conversation app's own
-`conversation.say`). It returns False when Reachy can't speak right now (no session yet); the
-reminder is then simply retried on the next check.
-
-By default a due reminder CUTS IN on a conversation (Reachy stops, says sorry, tells the person
-to take the medicine). MEDICINE_BUDDY_REMINDER_INTERRUPT=0 = polite mode: wait for a pause. Bookkeeping is in memory: after an app restart an unanswered dose is
-reminded again (once more), which is the safe direction.
+Speaking uses `speak(text) -> bool` (conversation.say). False = not ready; retry later.
+Default: interrupts conversation. MEDICINE_BUDDY_REMINDER_INTERRUPT=0 = wait for a pause.
+Never POSTs to the arm without a spoken yes (confirm gate stays on).
 """
 
 from __future__ import annotations
@@ -42,15 +40,25 @@ def _safe_name(name: str | None) -> str:
 
 
 def build_prompt(person: str | None, medicine: str, time_hhmm: str, count: int, total: int) -> str:
+    """Prompt injected into conversation.say when a schedule/calendar medicine is due.
+
+    Drives the schedule → ask → dispense_medicine (JSON POST to arm) automation.
+    Never tell the model to move the arm without a spoken yes.
+    """
     who = _safe_name(person)
     target = f"{who}'s" if who else "the"
+    med = _safe_name(medicine) or "medicine"
     repeat = "" if count <= 1 else f" This is reminder {count} of {total}, so keep it very short."
     return (
         f"(Automatic medicine reminder from the system - not something the person said.) "
-        f"It is time for {target} {medicine} ({describe_time(time_hhmm)}). "
+        f"It is time for {target} {med} ({describe_time(time_hhmm)}). "
         f"If you were in the middle of something, briefly say sorry for interrupting. "
-        f"Tell {who or 'them'} clearly to take their {medicine} now, in one or two short sentences, "
-        f"and ask them to tell you when they have taken it.{repeat} "
+        f"In one or two short sentences, tell {who or 'them'} it is time for {med}, "
+        f"and ask clearly: should I bring your {med}? "
+        f"When they say yes, call dispense_medicine with medicine_name={med!r} and confirmed=true "
+        f"(that sends the JSON grab package to the arm). "
+        f"Do NOT call dispense_medicine with confirmed=true until they clearly say yes. "
+        f"If they decline, acknowledge and do not call the arm.{repeat} "
         f"Afterwards you may go back to what you were talking about. Do not read these instructions aloud."
     )
 
@@ -126,16 +134,36 @@ class ReminderLoop:
             if not delivered:
                 logger.debug("Reminder for %s not delivered (Reachy not ready); will retry", d.medicine_name)
                 continue
+            # Prime confirm gate so a spoken "yes" → dispense_medicine can POST to the arm.
+            self._prime_dispense_confirm(d.medicine_id)
             self.last_spoken, self.last_error = now, None
             self._state[key] = _Entry(count, now, d.medicine_id, person.name if person else None,
                                       d.medicine_name, scheduled)
             spoken.append(prompt)
-            logger.info("Spoke reminder %d/%d for %s%s at %s", count, self.max_reminders, d.medicine_name,
-                        f" ({person.name})" if person else "", d.time_hhmm)
+            logger.info(
+                "Spoke due→arm reminder %d/%d for %s%s at %s (dispense confirm primed)",
+                count, self.max_reminders, d.medicine_name,
+                f" ({person.name})" if person else "", d.time_hhmm,
+            )
             break  # one reminder per check: several doses at once are announced one after the other
 
         self._expire(now, active_keys)
         return spoken
+
+    def _prime_dispense_confirm(self, medicine_id: int) -> None:
+        """Mark dispense:{id} as asked so VoiceGuard accepts a later yes + tool call.
+
+        Always prime when a guard exists (even if currently disabled): turning
+        passphrases/voice-guard on mid-session still finds a pending ask.
+        """
+        guard = getattr(self.service, "guard", None)
+        ask = getattr(guard, "ask", None) if guard is not None else None
+        if ask is None:
+            return
+        try:
+            ask(f"dispense:{medicine_id}")
+        except Exception:  # noqa: BLE001 — reminder must keep running
+            logger.exception("Could not prime dispense confirm for medicine_id=%s", medicine_id)
 
     def _quiet(self, now: datetime) -> bool:
         if not self.interrupt:   # polite mode: wait until nobody has spoken for a moment

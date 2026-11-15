@@ -57,6 +57,27 @@ def google_id_from_uid(uid: str) -> str | None:
         gid = text[len("gcal-") : -len("@google")]
         return gid or None
     return None
+
+
+def companion_fingerprint(title: str, time_hhmm: str, weekdays: str) -> tuple[str, str, str]:
+    """Identity for companion dedupe: same spoken event even if Google ids differ."""
+    return (
+        " ".join((title or "").casefold().split()),
+        (time_hhmm or "").strip(),
+        (weekdays or "").strip(),
+    )
+
+
+def google_ids_for_event(ev: CalendarEvent) -> set[str]:
+    ids: set[str] = set()
+    if (ev.external_id or "").strip():
+        ids.add(ev.external_id.strip())
+    gid = google_id_from_uid(ev.uid)
+    if gid:
+        ids.add(gid)
+    return ids
+
+
 SYNC_INTERVAL_S = 15 * 60
 FETCH_TIMEOUT_S = 12
 FETCH_MAX_BYTES = 1_500_000
@@ -439,53 +460,180 @@ class CalendarMixin:
             )
         return pulled
 
-    def _uid_and_external_for_import(self, item: ParsedEvent) -> tuple[str, str | None]:
-        """Map a pulled item onto an existing local row when Google id already linked."""
+    def _uid_and_external_for_import(
+        self, item: ParsedEvent, *, companion: bool = False
+    ) -> tuple[str, str | None]:
+        """Map a pulled item onto an existing row (Google id or companion fingerprint)."""
         gid = google_id_from_uid(item.uid)
         if gid:
             existing = self.db.get_calendar_event_by_external_id(gid)
             if existing is not None:
                 return existing.uid, gid
-            return item.uid, gid
-        return item.uid, None
+            by_uid = self.db.get_calendar_event_by_uid(item.uid)
+            if by_uid is not None:
+                return by_uid.uid, gid
+        if companion and item.summary:
+            match = self._find_active_companion_by_fingerprint(
+                companion_fingerprint(
+                    item.summary, item.time_hhmm or "", item.weekdays or ""
+                )
+            )
+            if match is not None:
+                # Drop the previous Google copy if the id changed (re-push junk).
+                old = (match.external_id or "").strip()
+                if gid and old and old != gid:
+                    self._safe_delete_google_ids({old})
+                return match.uid, gid
+        return item.uid, gid
+
+    def _find_active_companion_by_fingerprint(
+        self, fp: tuple[str, str, str]
+    ) -> CalendarEvent | None:
+        preferred: CalendarEvent | None = None
+        for ev in self.db.list_calendar_events(status="active", kind="companion", limit=500):
+            if companion_fingerprint(ev.title, ev.time_hhmm, ev.weekdays) != fp:
+                continue
+            if preferred is None:
+                preferred = ev
+                continue
+            # Prefer local / non-gcal, then lower id.
+            pref_gcal = google_id_from_uid(preferred.uid) is not None
+            ev_gcal = google_id_from_uid(ev.uid) is not None
+            if pref_gcal and not ev_gcal:
+                preferred = ev
+            elif pref_gcal == ev_gcal and ev.id < preferred.id:
+                preferred = ev
+        return preferred
+
+    def _prefer_keeper(self, keeper: CalendarEvent, challenger: CalendarEvent) -> CalendarEvent:
+        keeper_gcal = google_id_from_uid(keeper.uid) is not None
+        chall_gcal = google_id_from_uid(challenger.uid) is not None
+        if keeper_gcal and not chall_gcal:
+            return challenger
+        if keeper_gcal == chall_gcal and challenger.id < keeper.id:
+            return challenger
+        return keeper
 
     def dedupe_google_calendar_twins(self) -> int:
-        """Cancel orphan ``gcal-*`` rows that duplicate a local row with the same Google id."""
+        """Cancel duplicate active rows (same Google id, or same companion fingerprint)."""
         cancelled = 0
         keeper_by_gid: dict[str, int] = {}
         for ev in self.db.list_calendar_events(status="active", limit=500):
-            gid = (ev.external_id or "").strip() or google_id_from_uid(ev.uid) or ""
-            if not gid:
-                continue
-            is_gcal = google_id_from_uid(ev.uid) is not None
-            if not ev.external_id and is_gcal:
-                self.db.set_calendar_external_id(ev.id, gid)
-            keeper_id = keeper_by_gid.get(gid)
+            for gid in google_ids_for_event(ev):
+                is_gcal = google_id_from_uid(ev.uid) is not None
+                if not ev.external_id and is_gcal and google_id_from_uid(ev.uid) == gid:
+                    self.db.set_calendar_external_id(ev.id, gid)
+                keeper_id = keeper_by_gid.get(gid)
+                if keeper_id is None:
+                    keeper_by_gid[gid] = ev.id
+                    continue
+                if keeper_id == ev.id:
+                    continue
+                keeper = self.db.get_calendar_event(keeper_id)
+                if keeper is None or keeper.status != "active":
+                    keeper_by_gid[gid] = ev.id
+                    continue
+                winner = self._prefer_keeper(keeper, ev)
+                loser = ev if winner.id == keeper.id else keeper
+                if loser.status == "active":
+                    self.db.set_calendar_event_status(loser.id, "cancelled")
+                    cancelled += 1
+                keeper_by_gid[gid] = winner.id
+
+        keeper_by_fp: dict[tuple[str, str, str], int] = {}
+        for ev in self.db.list_calendar_events(status="active", kind="companion", limit=500):
+            fp = companion_fingerprint(ev.title, ev.time_hhmm, ev.weekdays)
+            keeper_id = keeper_by_fp.get(fp)
             if keeper_id is None:
-                keeper_by_gid[gid] = ev.id
+                keeper_by_fp[fp] = ev.id
+                continue
+            if keeper_id == ev.id:
                 continue
             keeper = self.db.get_calendar_event(keeper_id)
-            keeper_is_gcal = bool(keeper and google_id_from_uid(keeper.uid))
-            # Prefer keeping the non-gcal (local / mb-med-*) row.
-            if keeper_is_gcal and not is_gcal:
-                self.db.set_calendar_event_status(keeper_id, "cancelled")
+            if keeper is None or keeper.status != "active":
+                keeper_by_fp[fp] = ev.id
+                continue
+            winner = self._prefer_keeper(keeper, ev)
+            loser = ev if winner.id == keeper.id else keeper
+            if loser.status == "active":
+                self.db.set_calendar_event_status(loser.id, "cancelled")
                 cancelled += 1
-                keeper_by_gid[gid] = ev.id
-                if not ev.external_id:
-                    self.db.set_calendar_external_id(ev.id, gid)
-            else:
-                self.db.set_calendar_event_status(ev.id, "cancelled")
-                cancelled += 1
+            keeper_by_fp[fp] = winner.id
         return cancelled
+
+    def _safe_delete_google_ids(self, ids: set[str]) -> None:
+        cfg = self._google_cfg()
+        if not cfg.configured:
+            return
+        for eid in ids:
+            try:
+                delete_google_event(cfg, eid)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("Google delete of %s failed: %s", eid, exc)
+
+    def admin_delete_calendar_event(self, event_id: int) -> dict[str, Any]:
+        """Hard-delete a calendar row + same-fingerprint twins; remove Google copies."""
+        ev = self.db.get_calendar_event(event_id)
+        if ev is None:
+            return {"error": "row not found"}
+        related = [ev]
+        if ev.kind == "companion":
+            fp = companion_fingerprint(ev.title, ev.time_hhmm, ev.weekdays)
+            for other in self.db.list_calendar_events(
+                status=None, kind="companion", limit=500
+            ):
+                if other.id == ev.id:
+                    continue
+                if companion_fingerprint(other.title, other.time_hhmm, other.weekdays) == fp:
+                    related.append(other)
+        google_ids: set[str] = set()
+        deleted_ids: list[int] = []
+        for row in related:
+            google_ids |= google_ids_for_event(row)
+            if self.db.delete_calendar_event(row.id):
+                deleted_ids.append(row.id)
+        self._safe_delete_google_ids(google_ids)
+        return {
+            "status": "ok",
+            "deleted": {"table": "calendar_events", "id": event_id, "ids": deleted_ids},
+            "google_deleted": sorted(google_ids),
+        }
+
+    def admin_purge_calendar_junk(self) -> dict[str, Any]:
+        """Dedupe active companions, then hard-delete cancelled/rejected calendar rows."""
+        deduped = self.dedupe_google_calendar_twins()
+        hard_deleted = 0
+        for status in ("cancelled", "rejected"):
+            for ev in list(
+                self.db.list_calendar_events(status=status, limit=500)
+            ):
+                if self.db.delete_calendar_event(ev.id):
+                    hard_deleted += 1
+        return {
+            "status": "ok",
+            "deduped_cancelled": deduped,
+            "hard_deleted_cancelled": hard_deleted,
+            "message": (
+                f"Cancelled {deduped} duplicate(s), permanently removed "
+                f"{hard_deleted} cancelled/rejected row(s)."
+            ),
+        }
 
     def _apply_parsed_calendar_items(
         self, parsed: list[ParsedEvent], *, source: str
     ) -> dict[str, Any]:
         companion_n = proposal_n = updated_n = skipped = 0
         seen_companion_uids: set[str] = set()
+        seen_google_ids: set[str] = set()
         for item in parsed:
-            uid, external_id = self._uid_and_external_for_import(item)
-            if item.medicine_hint or self._looks_like_medicine(item.summary):
+            gid = google_id_from_uid(item.uid)
+            if gid:
+                seen_google_ids.add(gid)
+            is_med = bool(item.medicine_hint or self._looks_like_medicine(item.summary))
+            uid, external_id = self._uid_and_external_for_import(
+                item, companion=not is_med
+            )
+            if is_med:
                 hint = item.medicine_hint or item.summary
                 match = self.catalog.match(hint)
                 if match.name is None or not item.time_hhmm:
@@ -554,8 +702,9 @@ class CalendarMixin:
         cancelled_n = self._cancel_missing_import_companions(
             seen_companion_uids, sources={source}
         )
-        twins_n = self.dedupe_google_calendar_twins() if source == "google" else 0
-        cancelled_n += twins_n
+        if source == "google":
+            cancelled_n += self._cancel_google_linked_missing(seen_google_ids)
+            cancelled_n += self.dedupe_google_calendar_twins()
         now = datetime.now().astimezone().replace(microsecond=0).isoformat()
         self.db.set_setting(LAST_SYNC_KEY, now)
         self.db.set_setting(LAST_SYNC_ERROR_KEY, "")
@@ -573,6 +722,21 @@ class CalendarMixin:
                 + (f", {skipped} skipped." if skipped else ".")
             ),
         }
+
+    def _cancel_google_linked_missing(self, seen_google_ids: set[str]) -> int:
+        """Cancel companions whose Google id(s) are gone from the pull (deleted in Google)."""
+        if not seen_google_ids:
+            return 0
+        cancelled = 0
+        for ev in self.db.list_calendar_events(status="active", kind="companion", limit=500):
+            ids = google_ids_for_event(ev)
+            if not ids:
+                continue
+            if ids & seen_google_ids:
+                continue
+            self.db.set_calendar_event_status(ev.id, "cancelled")
+            cancelled += 1
+        return cancelled
 
     def _cancel_missing_import_companions(
         self, seen_uids: set[str], *, sources: set[str] | None = None
@@ -600,7 +764,11 @@ class CalendarMixin:
         return cancelled
 
     def _push_unsynced_local_to_google(self) -> int:
-        """Push active local + medicine mirrors that lack a Google event id."""
+        """Push active local + medicine mirrors that lack a Google event id.
+
+        Never push rows that already came from Google (``gcal-*`` / ``source=google``) —
+        that re-created events on Google and flooded Buddy with twins.
+        """
         cfg = self._google_cfg()
         if not cfg.configured:
             return 0
@@ -608,12 +776,14 @@ class CalendarMixin:
         for ev in self.db.list_calendar_events(status="active", limit=500):
             if ev.external_id:
                 continue
+            if google_id_from_uid(ev.uid) is not None:
+                continue
             # Never re-push pure ICS-import leftovers; Google pull owns those.
-            if ev.source == "import":
+            if ev.source in {"import", "google"}:
                 continue
             if ev.kind not in {"companion", "medicine"}:
                 continue
-            if ev.source not in {"local", "google", ""} and not ev.uid.startswith("mb-med-"):
+            if ev.source not in {"local", ""} and not ev.uid.startswith("mb-med-"):
                 continue
             try:
                 body = build_google_event_body(

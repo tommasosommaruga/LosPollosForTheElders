@@ -571,6 +571,156 @@ def test_admin_delete_calendar_and_dose_rows(service: MedicineBuddyService) -> N
     assert "error" in bad
 
 
+def test_never_repush_gcal_rows_even_without_external_id(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """gcal-* twins must never create NEW Google events (the duplicate factory)."""
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_CLIENT_SECRET", "csec")
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_REFRESH_TOKEN", "rtok")
+    service.db.set_setting("google_calendar_id", "cal@group.calendar.google.com")
+    service.db.upsert_calendar_event(
+        uid="gcal-oldid@google",
+        kind="companion",
+        title="Gym",
+        time_hhmm="03:00",
+        weekdays="0",
+        source="google",
+        external_id="",  # empty — old bug path
+    )
+    inserts: list[dict] = []
+    monkeypatch.setattr(
+        "medicine_buddy.calendar_service.insert_google_event",
+        lambda cfg, body: inserts.append(body) or "new-id",
+    )
+    assert service._push_unsynced_local_to_google() == 0
+    assert inserts == []
+
+
+def test_fingerprint_dedupe_cancels_gcal_twin_of_local(
+    service: MedicineBuddyService,
+) -> None:
+    """Same title/time/days → keep local, cancel google twin (even with different Google ids)."""
+    local = service.db.upsert_calendar_event(
+        uid="local-gym@medicine-buddy",
+        kind="companion",
+        title="Gym",
+        time_hhmm="03:00",
+        weekdays="0",
+        source="local",
+        external_id="master1",
+    )
+    twin = service.db.upsert_calendar_event(
+        uid="gcal-other@google",
+        kind="companion",
+        title="Gym",
+        time_hhmm="03:00",
+        weekdays="0",
+        source="google",
+        external_id="instance2",
+    )
+    n = service.dedupe_google_calendar_twins()
+    assert n >= 1
+    assert service.db.get_calendar_event(local.id).status == "active"
+    assert service.db.get_calendar_event(twin.id).status == "cancelled"
+
+
+def test_google_pull_merges_by_title_time_weekdays(
+    service: MedicineBuddyService,
+) -> None:
+    from medicine_buddy.calendar_ics import ParsedEvent
+
+    local = service.db.upsert_calendar_event(
+        uid="local-sandwich@medicine-buddy",
+        kind="companion",
+        title="make a sandwich",
+        time_hhmm="00:00",
+        weekdays="4",
+        source="local",
+        external_id="old-google-id",
+    )
+    service._apply_parsed_calendar_items(
+        [
+            ParsedEvent(
+                uid="gcal-brand-new-id@google",
+                summary="make a sandwich",
+                description="",
+                time_hhmm="00:00",
+                weekdays="4",
+                starts_at=None,
+                all_day=False,
+                medicine_hint=None,
+            )
+        ],
+        source="google",
+    )
+    active = service.db.list_calendar_events(status="active", kind="companion")
+    assert len(active) == 1
+    assert active[0].id == local.id
+    assert active[0].external_id == "brand-new-id"
+
+
+def test_purge_cancelled_calendar_rows(service: MedicineBuddyService) -> None:
+    keep = service.db.upsert_calendar_event(
+        uid="keep@medicine-buddy",
+        kind="companion",
+        title="Keep",
+        time_hhmm="10:00",
+        weekdays="*",
+        status="active",
+    )
+    gone = service.db.upsert_calendar_event(
+        uid="gone@medicine-buddy",
+        kind="companion",
+        title="Gone",
+        time_hhmm="11:00",
+        weekdays="*",
+        status="active",
+    )
+    service.db.set_calendar_event_status(gone.id, "cancelled")
+    result = service.admin_purge_calendar_junk()
+    assert result["status"] == "ok"
+    assert result["hard_deleted_cancelled"] >= 1
+    assert service.db.get_calendar_event(keep.id) is not None
+    assert service.db.get_calendar_event(gone.id) is None
+
+
+def test_admin_delete_calendar_also_removes_google(
+    service: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_CLIENT_SECRET", "csec")
+    monkeypatch.setenv("MEDICINE_BUDDY_GOOGLE_REFRESH_TOKEN", "rtok")
+    service.db.set_setting("google_calendar_id", "cal@group.calendar.google.com")
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        "medicine_buddy.calendar_service.delete_google_event",
+        lambda cfg, eid: deleted.append(eid),
+    )
+    ev = service.db.upsert_calendar_event(
+        uid="local-x@medicine-buddy",
+        kind="companion",
+        title="X",
+        time_hhmm="12:00",
+        weekdays="0",
+        source="local",
+        external_id="gid-1",
+    )
+    twin = service.db.upsert_calendar_event(
+        uid="gcal-gid-2@google",
+        kind="companion",
+        title="X",
+        time_hhmm="12:00",
+        weekdays="0",
+        source="google",
+        external_id="gid-2",
+    )
+    assert service.admin_delete_row("calendar_events", ev.id)["status"] == "ok"
+    assert service.db.get_calendar_event(ev.id) is None
+    assert service.db.get_calendar_event(twin.id) is None  # same fingerprint gone
+    assert "gid-1" in deleted and "gid-2" in deleted
+
+
 def _one(dtstart_line: str) -> str:
     return f"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:x\r\nSUMMARY:Visit\r\n{dtstart_line}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
 

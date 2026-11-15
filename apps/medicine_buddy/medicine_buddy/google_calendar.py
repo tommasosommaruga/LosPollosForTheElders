@@ -154,6 +154,52 @@ def delete_google_event(cfg: GoogleCalConfig, event_id: str) -> None:
         raise
 
 
+def wipe_google_calendar_events(cfg: GoogleCalConfig, *, max_delete: int = 500) -> int:
+    """Delete every non-cancelled event on the configured calendar (demo reset).
+
+    Pass 1 deletes masters (``singleEvents=false``) so recurring series vanish.
+    Pass 2 expands instances (``singleEvents=true``) for any leftovers.
+    Returns how many delete calls succeeded.
+    """
+    if not cfg.configured:
+        raise RuntimeError("Google Calendar write is not configured")
+    deleted = 0
+    for single in (False, True):
+        page_token: str | None = None
+        while deleted < max_delete:
+            token = _access_token(cfg)
+            cal = urllib.parse.quote(cfg.calendar_id, safe="")
+            params: dict[str, str] = {
+                "maxResults": "250",
+                "singleEvents": "true" if single else "false",
+                "showDeleted": "false",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            url = f"{CAL_API}/calendars/{cal}/events?{urllib.parse.urlencode(params)}"
+            raw = _http_json("GET", url, None, token=token)
+            items = raw.get("items") or []
+            if not items:
+                break
+            for item in items:
+                if deleted >= max_delete:
+                    break
+                gid = str(item.get("id") or "").strip()
+                if not gid:
+                    continue
+                if str(item.get("status") or "").lower() == "cancelled":
+                    continue
+                try:
+                    delete_google_event(cfg, gid)
+                    deleted += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("wipe skip %s: %s", gid, exc)
+            page_token = str(raw.get("nextPageToken") or "").strip() or None
+            if not page_token:
+                break
+    return deleted
+
+
 def probe_google_calendar(cfg: GoogleCalConfig) -> dict[str, Any]:
     """Lightweight connectivity check via events.list (matches calendar.events scope).
 

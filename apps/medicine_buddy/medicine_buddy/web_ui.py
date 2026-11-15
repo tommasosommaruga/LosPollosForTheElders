@@ -400,6 +400,20 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         status = 400 if "error" in payload else 200
         track(request, status, start, payload)
         return JSONResponse(payload, status)
+
+    @app.post(f"{PREFIX}/data/purge-calendar")
+    async def database_purge_calendar(request: Request):
+        start = time.perf_counter()
+        _, denied = need_change_rights(request)
+        if denied is not None:
+            return denied
+        purge = getattr(service, "admin_purge_calendar_junk", None)
+        if not callable(purge):
+            return JSONResponse({"error": "purge not available"}, 500)
+        payload = purge()
+        status = 400 if "error" in payload else 200
+        track(request, status, start, payload)
+        return JSONResponse(payload, status)
     # ------------------------------------------------------------------ history / explorer
     @app.get(f"{PREFIX}/history")
     def history_page(request: Request):
@@ -647,10 +661,13 @@ button.danger:hover{{background:#fee}}
 {nav}
 <h1>Database</h1>
 <p class=muted>View and delete rows stored on this machine. Passphrases are salted hashes and never shown.
-People are managed on the Family page. Deleting a calendar row clears sync duplicates; schedules are
-deactivated (not hard-wiped) so dose history stays coherent.</p>
+People are managed on the Family page. Deleting a calendar row also removes Google copies and same-title twins.
+Schedules are deactivated (not hard-wiped) so dose history stays coherent.</p>
 <p class=muted id=msg></p>
-<section><div class=kv id=info></div></section>
+<section style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+  <div class=kv id=info></div>
+  <button type=button class=danger id=purge>Purge calendar duplicates</button>
+</section>
 <section><div class=tabs id=tabs></div><p class=muted id=note></p>
 <table><thead id=head></thead><tbody id=body></tbody></table></section>
 <script>
@@ -685,7 +702,8 @@ function show() {{
 }}
 async function delRow(t, row) {{
   const label = row.slice(0, 3).map(String).join(" · ");
-  if (!confirm("Delete this " + t.name + " row?\\n" + label)) return;
+  if (!confirm("Delete this " + t.name + " row?\\n" + label +
+      (t.name === "calendar_events" ? "\\n(Also removes Google copies + same title/time twins.)" : ""))) return;
   const body = {{ table: t.name }};
   if (t.id_column === "key") body.key = row[0];
   else body.id = row[0];
@@ -697,9 +715,24 @@ async function delRow(t, row) {{
   }});
   const payload = await res.json().catch(() => ({{}}));
   if (!res.ok) {{ $("msg").textContent = payload.error || ("Delete failed (" + res.status + ")"); return; }}
-  $("msg").textContent = "Deleted.";
+  $("msg").textContent = payload.google_deleted && payload.google_deleted.length
+    ? ("Deleted locally + Google (" + payload.google_deleted.length + ").")
+    : "Deleted.";
   await load();
 }}
+$("purge").onclick = async () => {{
+  if (!confirm("Cancel duplicate companions (same title/time), then permanently delete all cancelled/rejected calendar rows?")) return;
+  $("msg").textContent = "Purging…";
+  const res = await fetch(P + "/data/purge-calendar", {{
+    method: "POST",
+    headers: {{ "Content-Type": "application/json", "X-Family-Token": TOKEN }},
+    body: "{{}}",
+  }});
+  const payload = await res.json().catch(() => ({{}}));
+  if (!res.ok) {{ $("msg").textContent = payload.error || ("Purge failed (" + res.status + ")"); return; }}
+  $("msg").textContent = payload.message || "Purged.";
+  await load();
+}};
 async function load() {{
   const r = await fetch(P + "/data/tables", {{cache: "no-store"}});
   if (r.status === 401) {{ location.href = P; return; }}

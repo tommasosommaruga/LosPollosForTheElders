@@ -199,6 +199,9 @@ class TranscriptMixin:
         if name == "calendar_events":
             if row_id is None:
                 return {"error": "id required"}
+            delete_cal = getattr(self, "admin_delete_calendar_event", None)
+            if callable(delete_cal):
+                return delete_cal(int(row_id))
             if not self.db.delete_calendar_event(int(row_id)):
                 return {"error": "row not found"}
             return {"status": "ok", "deleted": {"table": name, "id": int(row_id)}}

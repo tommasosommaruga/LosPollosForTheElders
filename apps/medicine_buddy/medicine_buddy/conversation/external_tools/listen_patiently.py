@@ -27,12 +27,10 @@ class ListenPatiently(Tool):
     # Starting listen mode must not force a spoken "OK I'm listening" that cuts them off.
     needs_response: ClassVar[bool] = False
     description = (
-        "Enter or leave patient listening for a story, recipe, or memory the person is dictating. "
-        "Call with action=start as soon as they begin telling something they may want saved — "
-        "this waits longer through short pauses so you do not interrupt. "
-        "Call action=stop when they say they are finished / that's the end, or after you saved "
-        "the memory. During patient listening stay mostly quiet (a soft mm-hmm is fine); do not "
-        "ask questions mid-story. Everyday chat does not need this tool."
+        "Mark that you are in patient-listening mode for a LONG story or recipe only. "
+        "Call action=start once when a long dictation clearly begins; action=stop when they "
+        "finish or after save_memory. Do not use for normal chat or medicine questions. "
+        "Keep brief warm spoken acknowledgements — never go fully silent."
     )
     parameters_schema = {
         "type": "object",

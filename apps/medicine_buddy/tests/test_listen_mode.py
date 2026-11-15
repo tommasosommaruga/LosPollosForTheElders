@@ -29,18 +29,15 @@ def test_default_is_normal_silence(svc: MedicineBuddyService) -> None:
 
 
 def test_start_and_stop_via_action(svc: MedicineBuddyService) -> None:
-    applied: list[bool] = []
-    svc.set_vad_applier(lambda patient: applied.append(patient) or True)
-
     on = svc.listen_mode({"action": "start"})
     assert on["enabled"] is True and on["silence_ms"] == LISTEN_SILENCE_MS
     assert svc.is_listen_patient() is True
-    assert applied == [True]
+    # Live VAD apply is intentionally off (session.update muted TTS); flag still toggles.
+    assert on.get("vad_applied") is False
 
     off = svc.listen_mode({"action": "stop"})
     assert off["enabled"] is False and off["silence_ms"] == NORMAL_SILENCE_MS
     assert svc.is_listen_patient() is False
-    assert applied == [True, False]
 
 
 def test_enabled_flag_and_timeout_expiry(svc: MedicineBuddyService, monkeypatch: pytest.MonkeyPatch) -> None:

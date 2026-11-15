@@ -33,6 +33,7 @@ from medicine_buddy.clock import ClockMixin
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database, Medicine, Person, Schedule
 from medicine_buddy.dry_run import FakeAdherence, FakeArm, FakeVision
+from medicine_buddy.arm_protocol import MoveObjectResult, new_request_id
 from medicine_buddy.http_arm import HttpArmClient
 from medicine_buddy.orchestrator import DoseStateMachine
 from medicine_buddy.scheduler import find_due_doses
@@ -570,7 +571,6 @@ class MedicineBuddyService(
                 for e in self.db.list_dose_events(medicine.id)[-12:]
             ]
 
-        speak_hint = buddy.messages[-1] if buddy.messages else final.value
         messages = buddy.messages
         demo = self.config.dry_run and remote is None
         arm_remote = remote is not None
@@ -583,11 +583,28 @@ class MedicineBuddyService(
                     "After they tell you, call mark_dose_taken."
                 )
                 messages = [speak_hint]
+            elif arm_remote:
+                # Prefer the live narrative (sent request → placed) for TTS.
+                speak_hint = (
+                    " ".join(messages[-2:])
+                    if len(messages) >= 2
+                    else (
+                        f"I sent a request to the arm for your {medicine.name}. "
+                        "It should be in the bowl — please take it. "
+                        "Then ask if they took it and call mark_dose_taken."
+                    )
+                )
+                if "mark_dose_taken" not in speak_hint:
+                    speak_hint = (
+                        f"{speak_hint} Then ask if they took it and call mark_dose_taken."
+                    )
             else:
                 speak_hint = (
                     f"Your {medicine.name} is in the bowl. Please take it. "
                     "Then ask if they took it and call mark_dose_taken."
                 )
+        else:
+            speak_hint = messages[-1] if messages else final.value
 
         return {
             "status": "ok",
@@ -634,6 +651,102 @@ class MedicineBuddyService(
                 "Thank you. I marked the dose as taken."
                 if taken_bool
                 else "I logged this dose as missed."
+            ),
+        }
+
+    def move_object(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Ask arm PC to move a graspable non-medicine object (bottle, box, …).
+
+        Confirm-gated like dispense. Does not touch dose_events or the medicine catalog.
+        Empty ARM_URL → demo success so voice still works offline.
+        """
+        label = " ".join(str(body.get("object_label") or body.get("label") or "").split())
+        if not label:
+            return {
+                "error": "object_label is required",
+                "speak_hint": "What should I ask the arm to bring?",
+            }
+        destination = " ".join(str(body.get("destination") or "bowl").split()) or "bowl"
+        kind_raw = str(body.get("kind_hint") or "").strip()
+        kind_hint = kind_raw or None
+        confirmed = bool(body.get("confirmed", False))
+        key = f"move_object:{label.casefold()}"
+
+        with self._lock:
+            if confirmed and self.guard.enabled and not self.guard.has_pending(key):
+                confirmed = False
+            if confirmed:
+                blocked = self.guard.require_yes("move object", key)
+                if blocked:
+                    return blocked
+            if not confirmed:
+                self.guard.ask(key)
+                return {
+                    "status": "needs_confirm",
+                    "object": {"label": label, "kind_hint": kind_hint},
+                    "destination": destination,
+                    "speak_hint": (
+                        f"Should I ask the arm to bring the {label} to the {destination}? "
+                        "If they say yes, call move_object again with confirmed=true."
+                    ),
+                }
+
+            remote = HttpArmClient.from_config(self.config)
+            try:
+                if remote is not None:
+                    result = remote.move_object(
+                        label=label,
+                        destination=destination,
+                        kind_hint=kind_hint,
+                    )
+                else:
+                    result = MoveObjectResult(
+                        request_id=new_request_id(),
+                        ok=True,
+                        final_state="placed",
+                        detect_detail="demo mode — no arm URL; nothing moved",
+                    )
+            except Exception as exc:  # noqa: BLE001 — speak failure, do not crash conversation
+                return {
+                    "status": "error",
+                    "error": str(exc)[:300],
+                    "speak_hint": (
+                        f"I couldn't reach the arm for the {label}. "
+                        "Please check the arm computer, or try again in a moment."
+                    ),
+                }
+
+        if result.ok and result.final_state == "placed":
+            demo = remote is None
+            hint = (
+                f"Demo mode: I would ask the arm to bring the {label} to the {destination}, "
+                "but no arm is connected right now."
+                if demo else
+                f"I sent a request to the arm for the {label}. "
+                f"Done — it placed it at the {destination}."
+            )
+            return {
+                "status": "ok",
+                "ok": True,
+                "final_state": result.final_state,
+                "object": {"label": label, "kind_hint": kind_hint},
+                "destination": destination,
+                "detect_detail": result.detect_detail,
+                "arm_remote": remote is not None,
+                "demo_mode": demo,
+                "speak_hint": hint,
+            }
+        detail = result.error or result.detect_detail or "arm could not complete the move"
+        return {
+            "status": "error",
+            "ok": False,
+            "final_state": result.final_state,
+            "error": detail,
+            "object": {"label": label, "kind_hint": kind_hint},
+            "destination": destination,
+            "speak_hint": (
+                f"The arm could not move the {label}. {detail}. "
+                "You can try again, or move it by hand."
             ),
         }
 
@@ -818,6 +931,7 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/schedules/delete": service.delete_schedule,
         "/doses/run": service.run_dose,
         "/doses/adherence": service.mark_adherence,
+        "/arm/move_object": service.move_object,
         "/voice/heard": service.voice_heard,  # loopback only, see _post
         "/voice/listen_mode": service.listen_mode,  # loopback only — patient story listening
         "/medicines/list": service.list_medicines,

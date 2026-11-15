@@ -5,8 +5,10 @@ schema: medicine_buddy.arm.v1
 Buddy → Arm:
   POST {ARM_URL}/v1/dispense     message_type=dispense
   POST {ARM_URL}/v1/check_taken  message_type=check_taken
+  POST {ARM_URL}/v1/move_object  message_type=move_object  (non-medicine graspables)
 
-Arm → Buddy: same request's JSON response body (dispense_result / check_taken_result).
+Arm → Buddy: same request's JSON response body
+  (dispense_result / check_taken_result / move_object_result).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any
 SCHEMA = "medicine_buddy.arm.v1"
 DISPENSE_PATH = "/v1/dispense"
 CHECK_TAKEN_PATH = "/v1/check_taken"
+MOVE_OBJECT_PATH = "/v1/move_object"
 
 FINAL_STATES = frozenset({"placed", "failed", "aborted"})
 
@@ -144,6 +147,68 @@ class CheckTakenResult:
             error=(str(data["error"]) if data.get("error") is not None else None),
             schema=str(data.get("schema") or SCHEMA),
             message_type=str(data.get("message_type") or "check_taken_result"),
+        )
+
+
+@dataclass(frozen=True)
+class ObjectRef:
+    """Spoken label for a graspable non-medicine object (bottle, box, …)."""
+
+    label: str
+    kind_hint: str | None = None
+
+
+@dataclass(frozen=True)
+class MoveObjectCommand:
+    request_id: str
+    object: ObjectRef
+    destination: str = "bowl"
+    actions: tuple[str, ...] = ("locate", "pick", "place")
+    one_shot_detect: bool = True
+    dry_run: bool = False
+    schema: str = SCHEMA
+    message_type: str = "move_object"
+
+    def to_json(self) -> str:
+        obj: dict[str, Any] = {"label": self.object.label}
+        if self.object.kind_hint:
+            obj["kind_hint"] = self.object.kind_hint
+        payload = {
+            "schema": self.schema,
+            "message_type": self.message_type,
+            "request_id": self.request_id,
+            "object": obj,
+            "destination": self.destination,
+            "actions": list(self.actions),
+            "one_shot_detect": self.one_shot_detect,
+            "dry_run": self.dry_run,
+        }
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
+class MoveObjectResult:
+    request_id: str
+    ok: bool
+    final_state: str
+    detect_detail: str = ""
+    error: str | None = None
+    schema: str = SCHEMA
+    message_type: str = "move_object_result"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], *, fallback_request_id: str = "") -> "MoveObjectResult":
+        state = str(data.get("final_state") or ("placed" if data.get("ok") else "failed")).lower()
+        if state not in FINAL_STATES:
+            state = "failed"
+        return cls(
+            request_id=str(data.get("request_id") or fallback_request_id),
+            ok=bool(data.get("ok")),
+            final_state=state,
+            detect_detail=str(data.get("detect_detail") or data.get("error") or ""),
+            error=(str(data["error"]) if data.get("error") is not None else None),
+            schema=str(data.get("schema") or SCHEMA),
+            message_type=str(data.get("message_type") or "move_object_result"),
         )
 
 

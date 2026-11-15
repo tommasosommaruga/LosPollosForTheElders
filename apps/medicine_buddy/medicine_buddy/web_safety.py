@@ -42,7 +42,7 @@ _INJECTION_PATTERNS = [
     r"\bjailbreak\b",
     r"\b(call|use|invoke|run|execute)\s+(the\s+)?(\w+\s+)?(tool|function)\b",
     r"\b(schedule_medicine|update_medicine_schedule|delete_medicine_schedule|dispense_medicine|"
-    r"mark_dose_taken|list_medicines|check_due_medicines|volume_control|safe_web_search)\b",
+    r"move_object|mark_dose_taken|list_medicines|check_due_medicines|volume_control|safe_web_search)\b",
     r"confirmed\s*=\s*true",
     r"\b(delete|remove|cancel|stop)\s+(all|every|the\s+user'?s?|their|your)\s+(medicine|medication|reminder|schedule)",
     r"\b(dispense|give|bring)\s+(all|every|extra|double)\b",

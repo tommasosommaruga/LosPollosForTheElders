@@ -81,6 +81,10 @@ class DoseStateMachine:
         stop_after_placed: bool,
     ) -> DoseState:
         assert isinstance(self.arm, HttpArmClient)
+        # Reachy should say this aloud (via speak_hint) while the JSON POST is in flight.
+        self.buddy.speak(
+            f"Okay — I'm sending a request to the arm to bring your {name} now."
+        )
         self.db.record_transition(
             medicine_id, DoseState.LOCATING, detail="arm.v1 dispense signal sent"
         )
@@ -94,7 +98,10 @@ class DoseStateMachine:
                 person=person_name,
             )
         except Exception as exc:  # noqa: BLE001
-            self.buddy.speak("I could not reach the arm computer. Please check the arm link.")
+            self.buddy.speak(
+                "I could not reach the arm computer to send that package. "
+                "Please check the arm link."
+            )
             self.db.record_transition(
                 medicine_id, DoseState.FAILED, detail=f"arm HTTP error: {exc}",
             )
@@ -103,7 +110,8 @@ class DoseStateMachine:
         if not result.ok or result.final_state != "placed":
             detail = result.error or result.detect_detail or result.final_state
             self.buddy.speak(
-                f"The arm could not bring your {name}. {detail or 'Please check the tray.'}"
+                f"The arm got my request, but could not bring your {name}. "
+                f"{detail or 'Please check the tray.'}"
             )
             self.db.record_transition(
                 medicine_id,
@@ -119,7 +127,9 @@ class DoseStateMachine:
             slot_id=result.slot_id,
             detail=result.detect_detail or f"label={result.label} score={result.score}",
         )
-        self.buddy.speak(f"Your {name} is in the bowl. Please take it.")
+        self.buddy.speak(
+            f"The arm placed your {name} in the bowl. Please take it."
+        )
 
         if stop_after_placed:
             return DoseState.PLACED

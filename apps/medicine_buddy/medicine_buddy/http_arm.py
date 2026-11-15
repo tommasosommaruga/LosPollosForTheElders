@@ -11,11 +11,15 @@ from urllib.parse import urljoin, urlparse
 from medicine_buddy.arm_protocol import (
     CHECK_TAKEN_PATH,
     DISPENSE_PATH,
+    MOVE_OBJECT_PATH,
     CheckTakenCommand,
     CheckTakenResult,
     DispenseCommand,
     DispenseResult,
     MedicineRef,
+    MoveObjectCommand,
+    MoveObjectResult,
+    ObjectRef,
     new_request_id,
     parse_json_body,
 )
@@ -56,6 +60,7 @@ class HttpArmClient:
         self.ocr_min_confidence = ocr_min_confidence
         self.last_dispense: DispenseResult | None = None
         self.last_check: CheckTakenResult | None = None
+        self.last_move: MoveObjectResult | None = None
         # Compatibility with ArmPort when orchestrator falls back to local steps
         self._last_slot: int | None = None
 
@@ -125,6 +130,30 @@ class HttpArmClient:
         )
         return result
 
+    def move_object(
+        self,
+        *,
+        label: str,
+        destination: str = "bowl",
+        kind_hint: str | None = None,
+        request_id: str | None = None,
+    ) -> MoveObjectResult:
+        rid = request_id or new_request_id()
+        cmd = MoveObjectCommand(
+            request_id=rid,
+            object=ObjectRef(label=label, kind_hint=kind_hint or None),
+            destination=destination or "bowl",
+            dry_run=self.dry_run,
+        )
+        raw = self._post(MOVE_OBJECT_PATH, cmd.to_json())
+        result = MoveObjectResult.from_dict(raw, fallback_request_id=rid)
+        self.last_move = result
+        logger.info(
+            "arm move_object_result request_id=%s ok=%s state=%s label=%s",
+            result.request_id, result.ok, result.final_state, label,
+        )
+        return result
+
     def to_adherence(self, result: CheckTakenResult) -> AdherenceResult:
         if result.taken is True:
             return AdherenceResult(taken=True, via=result.via or "camera", detail=result.detail or "arm one-shot")
@@ -154,6 +183,7 @@ class HttpArmClient:
 
     def _post(self, path: str, body: str) -> dict[str, Any]:
         url = urljoin(self.base_url + "/", path.lstrip("/"))
+        logger.info("arm POST %s → %s", path, body)
         req = urllib.request.Request(
             url,
             data=body.encode("utf-8"),
@@ -173,7 +203,11 @@ class HttpArmClient:
                 err_body = exc.read(4000).decode("utf-8", errors="replace")
             except Exception:  # noqa: BLE001
                 err_body = ""
+            logger.error("arm POST failed HTTP %s at %s: %s", exc.code, url, err_body or exc.reason)
             raise RuntimeError(f"arm HTTP {exc.code} at {url}: {err_body or exc.reason}") from exc
         except urllib.error.URLError as exc:
+            logger.error("arm unreachable at %s: %s", url, exc.reason)
             raise RuntimeError(f"arm unreachable at {url}: {exc.reason}") from exc
-        return parse_json_body(raw)
+        parsed = parse_json_body(raw)
+        logger.info("arm response %s ← %s", path, parsed)
+        return parsed

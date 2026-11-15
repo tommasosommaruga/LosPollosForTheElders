@@ -8,14 +8,19 @@ from typing import Any
 
 import pytest
 
+from medicine_buddy.api import MedicineBuddyService
 from medicine_buddy.arm_protocol import (
     CheckTakenCommand,
     CheckTakenResult,
     DispenseCommand,
     DispenseResult,
     MedicineRef,
+    MoveObjectCommand,
+    MoveObjectResult,
+    ObjectRef,
     parse_json_body,
 )
+from medicine_buddy.catalog import MedicineCatalog
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database
 from medicine_buddy.dry_run import FakeAdherence, FakeVision
@@ -23,6 +28,7 @@ from medicine_buddy.http_arm import HttpArmClient
 from medicine_buddy.orchestrator import DoseStateMachine
 from medicine_buddy.silent_buddy import SilentBuddy
 from medicine_buddy.states import DoseState
+from medicine_buddy.voice_guard import VoiceGuard
 
 
 def test_dispense_command_roundtrip_json() -> None:
@@ -77,12 +83,22 @@ class _FakeArmHttp(HttpArmClient):
         self.ocr_min_confidence = 0.65
         self.last_dispense = None
         self.last_check = None
+        self.last_move = None
         self._last_slot = None
         self._dispense = dispense
         self._check = check or {"ok": True, "taken": True, "via": "camera", "detail": "ok"}
+        self._move: dict[str, Any] | None = None
+        self.last_post_path: str | None = None
+        self.last_post_body: dict[str, Any] | None = None
 
     def _post(self, path: str, body: str) -> dict[str, Any]:
         payload = json.loads(body)
+        self.last_post_path = path
+        self.last_post_body = payload
+        if path.endswith("move_object"):
+            out = dict(self._move or {"ok": True, "final_state": "placed", "detect_detail": "ok"})
+            out.setdefault("request_id", payload["request_id"])
+            return out
         if path.endswith("dispense"):
             out = dict(self._dispense)
             out.setdefault("request_id", payload["request_id"])
@@ -110,6 +126,8 @@ def test_remote_dose_after_confirm(tmp_path: Path) -> None:
     )
     final = machine.run_dose(med.id, stop_after_placed=False, person_name="Mario")
     assert final == DoseState.TAKEN
+    assert any("sending a request to the arm" in m for m in buddy.messages)
+    assert any("placed your Aspirin" in m for m in buddy.messages)
     assert any("arm.v1" in e.detail or "dispense" in e.detail.lower()
                for e in db.list_dose_events(med.id))
 
@@ -153,3 +171,65 @@ def test_check_taken_command_json() -> None:
     assert data["message_type"] == "check_taken"
     assert data["one_shot_detect"] is True
     assert data["slot_id"] == 2
+
+
+def test_move_object_command_roundtrip_json() -> None:
+    cmd = MoveObjectCommand(
+        request_id="m1",
+        object=ObjectRef(label="water bottle", kind_hint="bottle"),
+        destination="bowl",
+    )
+    data = parse_json_body(cmd.to_json())
+    assert data["schema"] == "medicine_buddy.arm.v1"
+    assert data["message_type"] == "move_object"
+    assert data["object"] == {"label": "water bottle", "kind_hint": "bottle"}
+    assert data["destination"] == "bowl"
+    assert data["actions"] == ["locate", "pick", "place"]
+    assert data["one_shot_detect"] is True
+
+
+def test_move_object_result_parse() -> None:
+    result = MoveObjectResult.from_dict({
+        "schema": "medicine_buddy.arm.v1",
+        "message_type": "move_object_result",
+        "request_id": "m1",
+        "ok": True,
+        "final_state": "placed",
+        "detect_detail": "bottle_in_bowl",
+    })
+    assert result.ok and result.final_state == "placed"
+
+
+def test_http_client_posts_move_object_path() -> None:
+    arm = _FakeArmHttp({"ok": True, "final_state": "placed"})
+    arm._move = {"ok": True, "final_state": "placed", "detect_detail": "ok"}
+    result = arm.move_object(label="water bottle", destination="bowl", kind_hint="bottle")
+    assert result.ok and result.final_state == "placed"
+    assert arm.last_post_path == "/v1/move_object"
+    assert arm.last_post_body is not None
+    assert arm.last_post_body["message_type"] == "move_object"
+    assert arm.last_post_body["object"]["label"] == "water bottle"
+
+
+def test_api_move_object_needs_confirm_then_demo_ok(tmp_path: Path) -> None:
+    cat = MedicineCatalog({"Aspirin": []})
+    svc = MedicineBuddyService(
+        tmp_path / "move.db",
+        AppConfig(dry_run=True, arm_url=""),
+        cat,
+        VoiceGuard(cat, enabled=False),
+    )
+    ask = svc.move_object({"object_label": "water bottle", "confirmed": False})
+    assert ask["status"] == "needs_confirm"
+    assert "water bottle" in ask["speak_hint"]
+
+    done = svc.move_object({
+        "object_label": "water bottle",
+        "destination": "bowl",
+        "kind_hint": "bottle",
+        "confirmed": True,
+    })
+    assert done["status"] == "ok"
+    assert done["demo_mode"] is True
+    assert done["ok"] is True
+    assert "speak_hint" in done

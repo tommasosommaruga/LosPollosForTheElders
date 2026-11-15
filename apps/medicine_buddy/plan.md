@@ -63,6 +63,14 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Profile: freer emotions (`play_emotion`, `dance`, `move_head`, `sweep_look`, …); package version bumped (health uses `__version__`)
 - Tests: `test_listen_mode.py`, passphrase master-switch coverage in `test_family_settings.py`
 
+## v0.8.8 — back button only (done)
+
+- Restored **← Medicine Buddy** on Pollen `/` and sticky **← Dashboard** nav (no wake-robot)
+
+## v0.8.7 — rollback crashy features, keep calendar TZ (done)
+
+- Reverted to pre-`0ab191f` (dropped nav + wake-robot); kept ICS UTC/TZID fix
+
 ## v0.8.3 — arm HTTP JSON protocol (done)
 
 - After voice confirm, Buddy POSTs structured `medicine_buddy.arm.v1` JSON to `MEDICINE_BUDDY_ARM_URL`

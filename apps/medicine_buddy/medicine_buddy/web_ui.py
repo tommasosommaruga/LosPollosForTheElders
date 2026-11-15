@@ -77,24 +77,52 @@ class _Sessions:
 
 
 def _nav(active: str, who: str) -> str:
+    """Sticky top bar — Dashboard first so you can always leave Conversation / other pages."""
+
     def link(href: str, label: str, key: str) -> str:
-        style = "font-weight:700;text-decoration:underline" if key == active else ""
-        return f'<a href="{href}" style="margin-right:14px;{style}">{label}</a>'
+        cls = ' class="mb-nav-active"' if key == active else ""
+        return f'<a href="{href}"{cls}>{label}</a>'
+
     who_html = (who.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    logout = (
+        f'<a href="{PREFIX}/logout">Log out</a>'
+        if "open access" not in who.lower() and "nobody registered" not in who.lower()
+        else ""
+    )
     return (
-        '<div style="font-size:14px;font-weight:500;margin:6px 0 2px">'
-        + link(PREFIX, "Dashboard", "dash")
-        + link(f"{PREFIX}/conversation", "Conversation", "conv")
+        '<nav class="mb-nav" aria-label="Medicine Buddy">'
+        + link(PREFIX, "← Dashboard", "dash")
+        + link(f"{PREFIX}/conversation", "Live talk log", "conv")
         + link(f"{PREFIX}/data", "Database", "data")
         + link(f"{PREFIX}/history", "History", "history")
         + link(f"{PREFIX}/family", "Family &amp; passphrases", "family")
         + link(f"{PREFIX}/debug", "Debug", "debug")
-        + link("/", "Voice &amp; language settings", "voice")
-        + f'<span style="color:var(--muted,#888);margin-left:6px">{who_html}</span> '
-        + (f'<a href="{PREFIX}/logout" style="margin-left:8px">Log out</a>' if "open access" not in who.lower()
-           and "nobody registered" not in who.lower() else "")
-        + "</div>"
+        # Pollen's UI at / is titled "Conversation" — easy to get stuck without a way back.
+        + link("/", "Reachy conversation", "voice")
+        + f'<span class="mb-nav-who">{who_html}</span>'
+        + logout
+        + "</nav>"
     )
+
+
+def inject_dashboard_link(html: str) -> str:
+    """Add a permanent ← Medicine Buddy control on Pollen's / conversation page."""
+    if "mb-dashboard-link" in html:
+        return html
+    link = (
+        f'<a href="{PREFIX}" id="mb-dashboard-link" class="app-shell__icon-btn" '
+        'style="display:inline-flex;align-items:center;gap:6px;margin-right:8px;'
+        "padding:6px 10px;border-radius:8px;text-decoration:none;color:inherit;"
+        'font:600 13px/1.2 system-ui,sans-serif;white-space:nowrap" '
+        'aria-label="Back to Medicine Buddy dashboard">'
+        "← Medicine Buddy</a>"
+    )
+    marker = '<div class="app-shell__lead">'
+    if marker in html:
+        return html.replace(marker, marker + link, 1)
+    if "<body>" in html:
+        return html.replace("<body>", f"<body>{link}", 1)
+    return html
 
 
 class _Starting(Exception):
@@ -125,6 +153,25 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
     service = _LazyService(service_or_provider)
     sessions = _Sessions()
     app.state.medicine_sessions = sessions  # for tests
+
+    @app.middleware("http")
+    async def _inject_dashboard_on_pollen_home(request: Request, call_next):
+        """Pollen's / page is the live Conversation UI — inject a way back to /medicine."""
+        response = await call_next(request)
+        if request.method != "GET" or request.url.path != "/":
+            return response
+        ctype = (response.headers.get("content-type") or "").lower()
+        if "text/html" not in ctype:
+            return response
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk if isinstance(chunk, (bytes, bytearray)) else chunk.encode("utf-8")
+        patched = inject_dashboard_link(body.decode("utf-8", errors="replace"))
+        out_headers = {
+            k: v for k, v in response.headers.items()
+            if k.lower() not in {"content-length", "content-type"}
+        }
+        return HTMLResponse(patched, status_code=response.status_code, headers=out_headers)
 
     @app.exception_handler(_Starting)
     async def _starting(request: Request, exc: _Starting):
@@ -469,6 +516,10 @@ code{font-size:13px;word-break:break-all}
 .switch input{appearance:none;width:46px;height:26px;border-radius:99px;background:var(--line);position:relative;padding:0;border:0;cursor:pointer}
 .switch input::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s}
 .switch input:checked{background:var(--accent)} .switch input:checked::after{left:23px}
+.mb-nav{position:sticky;top:0;z-index:20;background:var(--bg);padding:8px 0 10px;margin:0 0 14px;
+  border-bottom:1px solid var(--line);font-size:14px;font-weight:500;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.mb-nav a{color:var(--accent);text-decoration:none} .mb-nav a.mb-nav-active{font-weight:700;text-decoration:underline}
+.mb-nav-who{color:var(--muted);margin-left:auto}
 """
 
 
@@ -519,7 +570,8 @@ def _conversation_page(csrf: str, nav: str) -> str:
 .reachy{{align-self:flex-start;background:var(--soft);border:1px solid var(--line)}}
 .person{{align-self:flex-end;background:var(--card);border:1px solid var(--line)}}
 </style></head><body><main>
-<h1>Conversation</h1>{nav}
+{nav}
+<h1>Live talk log</h1>
 <p class=muted>Live: what the person said and what Reachy answered. Kept in memory only (last 200 lines),
 never saved to the database or logs, and gone when the app restarts. Spoken passphrases are hidden.</p>
 <section>
@@ -560,7 +612,8 @@ def _database_page(nav: str) -> str:
 .tabs button{{margin:0 6px 6px 0}} .tabs button.on{{background:var(--accent);color:#fff;border-color:var(--accent)}}
 td{{white-space:pre-wrap;word-break:break-word}}
 </style></head><body><main>
-<h1>Database</h1>{nav}
+{nav}
+<h1>Database</h1>
 <p class=muted>Read-only view of everything stored on this machine. Changes are made by voice or on the Family page.
 Passphrases are stored only as salted hashes and are never shown.</p>
 <section><div class=kv id=info></div></section>
@@ -598,7 +651,8 @@ def _debug_page(csrf: str, nav: str) -> str:
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>Medicine Buddy - debug</title>
 <style>{_BASE_CSS}</style></head><body><main>
-<h1>Debug</h1>{nav}
+{nav}
+<h1>Debug</h1>
 <p class=muted>Live view, refreshes every 3 seconds. Never shows what people said or any passphrase.</p>
 <section style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
   <label class=switch><input type=checkbox id=dbg> <span>Debug mode</span></label>

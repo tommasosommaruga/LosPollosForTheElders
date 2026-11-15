@@ -165,6 +165,7 @@ fingerprint. This page works only on this computer.
   <p class="hint">Connect Outlook, Google or Apple with a subscribe link. Medicine Buddy stays the
   source of truth for medicines; companion events (visits, appointments, notes) live here too.</p>
   <p class="hint" id="cal-status">Loading&hellip;</p>
+  <p class="hint" id="cal-google-hint" style="margin-top:6px"></p>
   <div class="step" style="margin-top:10px"><label for="cal-export">Subscribe URL (export)</label>
     <div class="row"><input id="cal-export" readonly autocomplete="off" style="flex:1;min-width:200px">
     <button type="button" id="cal-copy">Copy</button>
@@ -177,7 +178,7 @@ fingerprint. This page works only on this computer.
     <span class="hint">Use the calendar's secret / publish address. Medicine-like events become proposals below.</span></div>
   <p class="hint" id="cal-sync-meta" style="margin-top:8px"></p>
   <div id="cal-proposals" style="margin-top:12px"></div>
-  <div id="cal-upcoming" style="margin-top:10px"></div>
+  <div id="cal-unified" style="margin-top:12px"></div>
   <div class="msg" id="cal-msg"></div>
 </section>
 
@@ -484,11 +485,16 @@ function showCalendar(r) {
     return;
   }
   $("cal-status").textContent = r.message || "Calendar ready.";
+  $("cal-google-hint").textContent = r.google_hint ||
+    "Google cloud needs a public/tunnel export URL; LAN calendar apps can use the subscribe link.";
   $("cal-export").value = calExportUrl((BASE || "") + (r.export_path || ""));
   $("cal-import").value = r.import_url || "";
   let meta = "";
   if (r.last_sync) meta = "Last sync: " + r.last_sync;
+  else meta = "Last sync: never";
   if (r.last_sync_error) meta += (meta ? " — " : "") + "Error: " + r.last_sync_error;
+  if (r.import_url) meta += (meta ? " · " : "") + "Import URL set";
+  else meta += (meta ? " · " : "") + "No import URL";
   $("cal-sync-meta").textContent = meta;
   const box = $("cal-proposals");
   box.replaceChildren();
@@ -512,13 +518,30 @@ function showCalendar(r) {
     row.append(label, acc, rej);
     box.appendChild(row);
   });
-  const up = $("cal-upcoming");
-  up.replaceChildren();
-  if ((r.upcoming || []).length) {
-    const h = document.createElement("p");
-    h.className = "hint";
-    h.textContent = "Upcoming companion: " + r.upcoming.join("; ");
-    up.appendChild(h);
+  const list = $("cal-unified");
+  list.replaceChildren();
+  const heading = document.createElement("p");
+  heading.className = "hint";
+  heading.style.fontWeight = "600";
+  heading.textContent = "Timeline (medicines + companion)";
+  list.appendChild(heading);
+  const rows = r.unified || [];
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "No active medicines or companion events yet.";
+    list.appendChild(empty);
+  } else {
+    rows.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "meta";
+      row.style.marginTop = "4px";
+      const kind = item.kind === "medicine" ? "Medicine" : "Companion";
+      const when = (item.weekdays || "*") + " @ " + (item.time_hhmm || "all day");
+      const src = item.source ? " · " + item.source : "";
+      row.textContent = kind + ": " + (item.title || "?") + " · " + when + src;
+      list.appendChild(row);
+    });
   }
 }
 

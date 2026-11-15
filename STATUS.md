@@ -1,6 +1,6 @@
 # Medicine Buddy — current status (single check)
 
-**Last updated:** 2026-11-15 · **Code version in this checkout:** `0.8.12` (`medicine_buddy.__version__`)  
+**Last updated:** 2026-11-15 · **Code version in this checkout:** `0.9.0` (`medicine_buddy.__version__`)  
 **Last git commit on `main`:** `65fa163` — *Fix muted Reachy speech after patient-listen VAD patch.*
 
 Use this file to see **what is plugged in and working**, **what is partial / broken**, and **how the pipeline runs**, for **both** places the app lives.
@@ -47,6 +47,7 @@ Use this file to see **what is plugged in and working**, **what is partial / bro
 | Safe web search (scrubbed, untrusted) | **Working** | `safe_web_search` + `web_safety.py` |
 | In-app UI: dashboard, history, conversation, DB, family, debug | **Working** | `/medicine/*` |
 | Companion calendar (ICS subscribe + import proposals) | **Working (laptop WIP until ship)** | Family page + voice tools; meds still SQLite |
+| Unified clock + calendar timeline (`0.9.0`) | **Working (laptop WIP until ship)** | `get_robot_time`; `list_upcoming_events(when=…)`; med mirror; harder ICS import; Family unified list |
 | Install path: git → robot apps_venv | **Working** | `scripts/install_on_robot.sh` |
 
 ---
@@ -116,6 +117,7 @@ Legend: **OK** = works end-to-end · **PART** = code present but incomplete/demo
 | Family video-call (live) | NO — mock “coming soon” only | NO |
 | `suggest_activity` voice tool | WIP | NO |
 | Companion calendar ICS + voice events | WIP (`0.8.0`) | NO (until push + reinstall) |
+| Unified clock / `when` timeline (`0.9.0`) | WIP | NO (until push + reinstall) |
 | Smart-home / scam-call / games | NO | NO |
 | Multi-room / multi-arm chores | NO | NO |
 
@@ -183,7 +185,7 @@ Legend: **OK** = works end-to-end · **PART** = code present but incomplete/demo
 `register_person`, `list_people`, `save_memory`, `recall_person_memories`, `forget_memory`, `schedule_medicine`, `update_medicine_schedule`, `delete_medicine_schedule`, `list_medicines`, `check_due_medicines`, `dispense_medicine`, `mark_dose_taken`, emotions/head/camera/volume, `safe_web_search` (+ calendar / companion tools in newer installs).
 
 **Also in this laptop checkout (WIP):**  
-`start_family_call`, `suggest_activity`.
+`start_family_call`, `suggest_activity`, `get_robot_time`, `list_upcoming_events` (with `when`), calendar create/cancel.
 
 ---
 

@@ -28,7 +28,8 @@ class ScheduleMedicine(Tool):
         "Save a NEW medicine reminder. Use when they say they take a medicine on certain days/times. "
         "Only medicines on the allowed list are accepted; pass the name as the person said it and the "
         "server recognizes it (or returns suggestions to ask about). "
-        "weekdays: 'daily', 'weekdays', 'weekends' or names like 'Mon,Wed,Fri'. time: '09:00' or '9 AM'. "
+        "weekdays: 'daily', 'weekdays', 'weekends', names like 'Mon,Wed,Fri', or 'today'/'tomorrow' "
+        "(those become a recurring reminder for that weekday). time: '09:00' or '9 AM'. "
         "FIRST-TIME SETUP: if the person is not registered yet, the tool returns needs_passphrase_setup. "
         "Ask them to choose 3–4 easy words and SAY THEM TWICE out loud, then call this tool again with "
         "new_passphrase set to those words (do not invent a passphrase; only use words they said). "
@@ -49,7 +50,13 @@ class ScheduleMedicine(Tool):
                 ),
             },
             "name": {"type": "string", "description": "Medicine name, e.g. Aspirin"},
-            "weekdays": {"type": "string", "description": "daily or weekday list"},
+            "weekdays": {
+                "type": "string",
+                "description": (
+                    "daily, weekdays, weekends, names like Mon,Wed,Fri, or today/tomorrow "
+                    "(today/tomorrow store a recurring schedule for that weekday)"
+                ),
+            },
             "time": {"type": "string", "description": "Local time HH:MM"},
         },
         "required": ["name", "weekdays", "time"],

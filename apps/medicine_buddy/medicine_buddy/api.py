@@ -32,6 +32,7 @@ from medicine_buddy.clock import ClockMixin
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database, Medicine, Person, Schedule
 from medicine_buddy.dry_run import FakeAdherence, FakeArm, FakeVision
+from medicine_buddy.http_arm import HttpArmClient
 from medicine_buddy.orchestrator import DoseStateMachine
 from medicine_buddy.scheduler import find_due_doses
 from medicine_buddy.silent_buddy import SilentBuddy
@@ -122,6 +123,7 @@ class MedicineBuddyService(
         return {
             "status": "ok",
             "dry_run": self.config.dry_run,
+            "arm_url_configured": bool((self.config.arm_url or "").strip()),
             "service": "medicine-buddy",
             "version": __version__,
         }
@@ -532,13 +534,24 @@ class MedicineBuddyService(
 
             buddy = SilentBuddy(confirm=True, adherence_taken=None)
             vision = FakeVision(self.config)
-            arm = FakeArm()
+            arm: FakeArm | HttpArmClient = FakeArm()
+            remote = HttpArmClient.from_config(self.config)
+            if remote is not None:
+                arm = remote
+                # Arm does one-shot place + camera check_taken unless conversation wants a pause.
+                # With remote arm, still honour stop_after_placed for TTS handoff after place.
             adherence = FakeAdherence(buddy, auto_taken=None)
             machine = DoseStateMachine(
                 self.db, buddy, vision, arm, adherence, self.config
             )
+            person_name = None
+            if medicine.person_id is not None:
+                owner = self.db.get_person(medicine.person_id)
+                person_name = owner.name if owner else None
             final = machine.run_dose(
-                medicine.id, stop_after_placed=stop_after_placed
+                medicine.id,
+                stop_after_placed=stop_after_placed,
+                person_name=person_name,
             )
             events = [
                 {
@@ -551,7 +564,8 @@ class MedicineBuddyService(
 
         speak_hint = buddy.messages[-1] if buddy.messages else final.value
         messages = buddy.messages
-        demo = self.config.dry_run
+        demo = self.config.dry_run and remote is None
+        arm_remote = remote is not None
         if final.value == "Placed":
             if demo:
                 # Nothing was physically moved: never claim the medicine is in a bowl.
@@ -571,6 +585,7 @@ class MedicineBuddyService(
             "status": "ok",
             "final_state": final.value,
             "demo_mode": demo,
+            "arm_remote": arm_remote,
             "medicine": {"id": medicine.id, "name": medicine.name},
             "messages": messages,
             "events": events,

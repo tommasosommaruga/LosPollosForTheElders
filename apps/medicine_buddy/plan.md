@@ -63,6 +63,12 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Profile: freer emotions (`play_emotion`, `dance`, `move_head`, `sweep_look`, …); package version bumped (health uses `__version__`)
 - Tests: `test_listen_mode.py`, passphrase master-switch coverage in `test_family_settings.py`
 
+## v0.8.3 — arm HTTP JSON protocol (done)
+
+- After voice confirm, Buddy POSTs structured `medicine_buddy.arm.v1` JSON to `MEDICINE_BUDDY_ARM_URL`
+- `/v1/dispense` (one-shot locate/pick/place) + `/v1/check_taken` (one-shot camera)
+- Empty ARM_URL → FakeArm demo; handoff doc updated
+
 ## v0.8.2 — open UI, no caregiver-only gates (done)
 
 - `/medicine` Dashboard, Database, History, Family, Debug open by default (no caregiver login)

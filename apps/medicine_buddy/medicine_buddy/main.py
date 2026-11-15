@@ -73,7 +73,7 @@ from reachy_mini_conversation_app.conversation_handler import ConversationHandle
 
 from medicine_buddy.api import MedicineBuddyService, start_server  # noqa: E402
 from medicine_buddy.calendar_service import CalendarSyncLoop  # noqa: E402
-from medicine_buddy.config import AppConfig  # noqa: E402
+from medicine_buddy.config import load_app_config  # noqa: E402
 from medicine_buddy.db import default_db_path  # noqa: E402
 from medicine_buddy.checkins import CheckInLoop  # noqa: E402
 from medicine_buddy.reminders import ReminderLoop  # noqa: E402
@@ -137,7 +137,10 @@ class MedicineBuddy(ReachyMiniApp):
         port = int(os.environ.get("MEDICINE_BUDDY_PORT", "8787"))
         guard = os.environ.get("MEDICINE_BUDDY_VOICE_GUARD", "1").lower() not in {"0", "false", "no", "off"}
         db_path = default_db_path()
-        service, server, _ = start_server(host, port, db_path, AppConfig(dry_run=True), voice_guard=guard)
+        # dry_run stays true until arm URL is live; ARM_URL enables structured HTTP arm.v1 signals.
+        service, server, _ = start_server(
+            host, port, db_path, load_app_config(dry_run=True), voice_guard=guard,
+        )
         _SERVICE = service
         _install_transcript_hook()
         # Never patch HuggingFace ServerVad — stock Reachy Mini speech-to-speech only.

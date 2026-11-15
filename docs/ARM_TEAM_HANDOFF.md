@@ -1,53 +1,110 @@
-# Arm / camera / movement-training handoff
+# Arm / camera handoff — structured HTTP signals
 
-This document is for the subgroup working on **Maker Arm software, cameras, and motion training**. The orchestration repo is already runnable in dry-run; you replace fakes with real hardware.
+Medicine Buddy (Reachy) asks the person to confirm, then sends **standardized JSON text** to the arm PC. The arm does **one-shot** detection + motion, then optionally a **one-shot** camera check that they took the medicine.
 
-## What already works without you
+## Config on Medicine Buddy
 
-- Medicine schedule DB + due detection  
-- Confirm → locate → pick → place → adherence **state machine**  
-- HTTP API + Reachy conversation tools (TTS on pollen app)  
-- `FakeVision` / `FakeArm` for demos and CI  
+```bash
+MEDICINE_BUDDY_ARM_URL=http://<arm-pc-ip>:9090
+# MEDICINE_BUDDY_ARM_TIMEOUT_S=90
+```
 
-## What we need from you
+If `ARM_URL` is empty, Buddy keeps `FakeArm` (demo).
 
-Implement the ports in `apps/medicine_buddy/medicine_buddy/ports.py`:
+## Protocol (`schema`: `medicine_buddy.arm.v1`)
 
-### 1. `VisionPort.locate_medicine(medicine_name) -> OcrMatch | None`
+Code: `medicine_buddy/arm_protocol.py`, client: `medicine_buddy/http_arm.py`.
 
-- Use overhead (+ optional wrist) cameras.  
-- Read unique text on standardized boxes.  
-- Return `OcrMatch(slot_id, label, score)`.  
-- Return `None` if empty, unknown, low score, or more than one match.  
-- Known labels come from the schedule DB / tray config (`agents.local.md` / `AppConfig.tray_labels`).
+### 1. After person says yes → dispense
 
-### 2. `ArmPort.replay_slot_to_bowl(slot_id)`
+`POST {ARM_URL}/v1/dispense`  
+`Content-Type: application/json`
 
-- Replay a **taught** trajectory for that slot into the fixed bowl pose.  
-- Prefer recorded waypoints over online planning for the hackathon.  
-- Respect e-stop and joint limits.
+```json
+{
+  "schema": "medicine_buddy.arm.v1",
+  "message_type": "dispense",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "medicine": { "id": 12, "name": "Aspirin", "person": "Mario" },
+  "slot_hint": null,
+  "ocr_min_confidence": 0.65,
+  "actions": ["locate", "pick_to_bowl", "verify_place"],
+  "one_shot_detect": true,
+  "dry_run": false
+}
+```
 
-### 3. `ArmPort.verify_place(slot_id) -> PlaceVerifyResult`
+**Arm response (same HTTP request body):**
 
-- After replay, confirm via cameras that the bowl looks occupied / slot cleared enough.  
-- `ok=False` must abort the dose as `Failed` (orchestrator already does this).
+```json
+{
+  "schema": "medicine_buddy.arm.v1",
+  "message_type": "dispense_result",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "ok": true,
+  "final_state": "placed",
+  "slot_id": 2,
+  "label": "ASPIRIN",
+  "score": 0.91,
+  "place_verified": true,
+  "detect_detail": "box_in_bowl",
+  "error": null
+}
+```
 
-## Integration steps
+`final_state`: `placed` | `failed` | `aborted`  
+`ok: false` → Buddy speaks failure, dose state **Failed**, no Taken.
 
-1. Keep developing against your SDK / Lab / training pipeline.  
-2. Add a module e.g. `medicine_buddy/hardware_arm.py` + `hardware_vision.py`.  
-3. In `api.py` / CLI, when `dry_run=false`, construct your classes instead of `Fake*`.  
-4. Store machine-specific waypoints under `apps/medicine_buddy/data/waypoints/` (gitignored pattern already set).  
-5. Document camera indices in `agents.local.md`.
+### 2. After place → one-shot “did they take it?”
+
+`POST {ARM_URL}/v1/check_taken`
+
+```json
+{
+  "schema": "medicine_buddy.arm.v1",
+  "message_type": "check_taken",
+  "request_id": "…",
+  "medicine": { "id": 12, "name": "Aspirin", "person": "Mario" },
+  "slot_id": 2,
+  "timeout_seconds": 8.0,
+  "one_shot_detect": true,
+  "dry_run": false
+}
+```
+
+**Response:**
+
+```json
+{
+  "schema": "medicine_buddy.arm.v1",
+  "message_type": "check_taken_result",
+  "request_id": "…",
+  "ok": true,
+  "taken": true,
+  "via": "camera",
+  "detail": "hand_to_mouth_or_bowl_cleared",
+  "error": null
+}
+```
+
+`taken`: `true` | `false` | `null` (inconclusive → Buddy asks by voice).
+
+## Flow (locked)
+
+1. Reachy: “Should I bring your {med}?” → **only after yes**  
+2. Buddy POSTs `/v1/dispense`  
+3. Arm one-shot locate + pick closed box → bowl + place verify  
+4. Buddy POSTs `/v1/check_taken` (unless conversation paused after place)  
+5. Dose → **Taken** | **Missed** | **Failed**
 
 ## Demo success criteria
 
-- [ ] Labeled box for due medicine is identified with confidence ≥ threshold  
-- [ ] Arm places **closed** box in bowl without human teleop  
-- [ ] Wrong/low-confidence label → no motion  
-- [ ] Place failure → spoken/API error, state `Failed`  
-- [ ] Works after Reachy user said yes to “should I bring it?”
+- [ ] No motion until Buddy sends `dispense` after voice yes  
+- [ ] One-shot OCR/detect on arm; low confidence → `ok:false`  
+- [ ] Closed box in bowl; place failure → `failed`  
+- [ ] One-shot camera `check_taken` returns taken true/false/null  
+- [ ] E-stop respected on arm side  
 
 ## Do not block on
 
-Opening packaging, pill counting, multi-room chores, or replacing the conversation TTS stack.
+Opening packaging, pill counting, or OAuth calendars.

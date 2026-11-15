@@ -1,6 +1,6 @@
 # Medicine Buddy — current status (single check)
 
-**Last updated:** 2026-11-15 · **Code version in this checkout:** `0.8.2` (`medicine_buddy.__version__`)  
+**Last updated:** 2026-11-15 · **Code version in this checkout:** `0.8.3` (`medicine_buddy.__version__`)  
 **Last git commit on `main`:** `65fa163` — *Fix muted Reachy speech after patient-listen VAD patch.*
 
 Use this file to see **what is plugged in and working**, **what is partial / broken**, and **how the pipeline runs**, for **both** places the app lives.

@@ -1,0 +1,172 @@
+"""Standardized structured text (JSON) protocol between Medicine Buddy and arm software.
+
+schema: medicine_buddy.arm.v1
+
+Buddy → Arm:
+  POST {ARM_URL}/v1/dispense     message_type=dispense
+  POST {ARM_URL}/v1/check_taken  message_type=check_taken
+
+Arm → Buddy: same request's JSON response body (dispense_result / check_taken_result).
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import asdict, dataclass
+from typing import Any
+
+SCHEMA = "medicine_buddy.arm.v1"
+DISPENSE_PATH = "/v1/dispense"
+CHECK_TAKEN_PATH = "/v1/check_taken"
+
+FINAL_STATES = frozenset({"placed", "failed", "aborted"})
+
+
+@dataclass(frozen=True)
+class MedicineRef:
+    id: int
+    name: str
+    person: str | None = None
+
+
+@dataclass(frozen=True)
+class DispenseCommand:
+    request_id: str
+    medicine: MedicineRef
+    slot_hint: int | None = None
+    ocr_min_confidence: float = 0.65
+    actions: tuple[str, ...] = ("locate", "pick_to_bowl", "verify_place")
+    one_shot_detect: bool = True
+    dry_run: bool = False
+    schema: str = SCHEMA
+    message_type: str = "dispense"
+
+    def to_json(self) -> str:
+        payload = {
+            "schema": self.schema,
+            "message_type": self.message_type,
+            "request_id": self.request_id,
+            "medicine": asdict(self.medicine),
+            "slot_hint": self.slot_hint,
+            "ocr_min_confidence": self.ocr_min_confidence,
+            "actions": list(self.actions),
+            "one_shot_detect": self.one_shot_detect,
+            "dry_run": self.dry_run,
+        }
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
+class DispenseResult:
+    request_id: str
+    ok: bool
+    final_state: str
+    slot_id: int | None = None
+    label: str | None = None
+    score: float | None = None
+    place_verified: bool = False
+    detect_detail: str = ""
+    error: str | None = None
+    schema: str = SCHEMA
+    message_type: str = "dispense_result"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], *, fallback_request_id: str = "") -> "DispenseResult":
+        state = str(data.get("final_state") or ("placed" if data.get("ok") else "failed")).lower()
+        if state not in FINAL_STATES:
+            state = "failed"
+        return cls(
+            request_id=str(data.get("request_id") or fallback_request_id),
+            ok=bool(data.get("ok")),
+            final_state=state,
+            slot_id=_optional_int(data.get("slot_id")),
+            label=(str(data["label"]) if data.get("label") is not None else None),
+            score=_optional_float(data.get("score")),
+            place_verified=bool(data.get("place_verified")),
+            detect_detail=str(data.get("detect_detail") or data.get("error") or ""),
+            error=(str(data["error"]) if data.get("error") is not None else None),
+            schema=str(data.get("schema") or SCHEMA),
+            message_type=str(data.get("message_type") or "dispense_result"),
+        )
+
+
+@dataclass(frozen=True)
+class CheckTakenCommand:
+    request_id: str
+    medicine: MedicineRef
+    slot_id: int | None = None
+    timeout_seconds: float = 8.0
+    one_shot_detect: bool = True
+    dry_run: bool = False
+    schema: str = SCHEMA
+    message_type: str = "check_taken"
+
+    def to_json(self) -> str:
+        payload = {
+            "schema": self.schema,
+            "message_type": self.message_type,
+            "request_id": self.request_id,
+            "medicine": asdict(self.medicine),
+            "slot_id": self.slot_id,
+            "timeout_seconds": self.timeout_seconds,
+            "one_shot_detect": self.one_shot_detect,
+            "dry_run": self.dry_run,
+        }
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
+class CheckTakenResult:
+    request_id: str
+    ok: bool
+    taken: bool | None  # None = inconclusive
+    via: str = "camera"
+    detail: str = ""
+    error: str | None = None
+    schema: str = SCHEMA
+    message_type: str = "check_taken_result"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], *, fallback_request_id: str = "") -> "CheckTakenResult":
+        taken_raw = data.get("taken")
+        taken: bool | None
+        if taken_raw is None:
+            taken = None
+        else:
+            taken = bool(taken_raw)
+        return cls(
+            request_id=str(data.get("request_id") or fallback_request_id),
+            ok=bool(data.get("ok", True)),
+            taken=taken,
+            via=str(data.get("via") or "camera"),
+            detail=str(data.get("detail") or data.get("detect_detail") or ""),
+            error=(str(data["error"]) if data.get("error") is not None else None),
+            schema=str(data.get("schema") or SCHEMA),
+            message_type=str(data.get("message_type") or "check_taken_result"),
+        )
+
+
+def new_request_id() -> str:
+    return str(uuid.uuid4())
+
+
+def parse_json_body(raw: str | bytes) -> dict[str, Any]:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("arm response must be a JSON object")
+    return data
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)

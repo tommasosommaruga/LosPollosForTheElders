@@ -208,10 +208,10 @@ fingerprint. This page works only on this computer.
     <div class="step"><label for="ad-name">Name</label><input id="ad-name" autocomplete="off" placeholder="e.g. Mario"></div>
     <div class="step"><label for="ad-role">Role</label>
       <select id="ad-role"><option value="person">Family member (their own medicines &amp; memories)</option>
-      <option value="caregiver">Caregiver (can manage everyone)</option></select></div>
-    <div class="step" id="ad-care-step" hidden><label for="ad-care">An existing caregiver's passphrase</label>
+      <option value="caregiver">Caregiver (label only — same access as everyone)</option></select></div>
+    <div class="step" id="ad-care-step" hidden><label for="ad-care">Optional note passphrase (unused)</label>
       <div class="pw"><input id="ad-care" type="password" autocomplete="off"><button type="button" data-show="ad-care">Show</button></div>
-      <span class="hint">Only a caregiver can make someone else a caregiver.</span></div>
+      <span class="hint">Caregiver is only a badge now; anyone can manage medicines and settings.</span></div>
     <div class="step"><label for="ad-new">Their passphrase</label>
       <div class="row"><button type="button" id="ad-suggest">&#127922; Suggest an easy one</button></div>
       <div class="chips" id="ad-chips" hidden></div>
@@ -278,7 +278,7 @@ async function loadPeople() {
   const box = $("people");
   if (!r.people || !r.people.length) {
     const p = document.createElement("div"); p.className = "meta";
-    p.textContent = "Nobody yet. Add the caregiver below, or let people set up their passphrase by voice.";
+    p.textContent = "Nobody yet. Add someone below, or let people set up their passphrase by voice.";
     box.replaceChildren(p); return;
   }
   box.replaceChildren(...r.people.map(p => {

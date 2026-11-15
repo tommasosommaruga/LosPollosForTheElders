@@ -1,25 +1,20 @@
 """People, passphrases, access control and the family memory store.
 
 Roles
-- person:    has their own medicine timetable and memories. Changing THEIR timetable or
-             saving THEIR memories needs THEIR passphrase.
-- caregiver: admin override - their passphrase works for anyone's timetable / memories.
-Reading (what medicines does Mario take? tell me Grandma's polenta recipe) is open, so
-family members can ask about each other by name.
+- person / caregiver labels still exist for display, but gating is easy-mode by default:
+  when passphrase checks are ON, **any** registered person's passphrase authorises changes
+  (not caregiver-only). When checks are OFF (default), voice changes need no passphrase.
+Reading (what medicines does Mario take? tell me Grandma's polenta recipe) is always open.
 
 Setting up
 - A person gets their passphrase the first time something is saved for them: Reachy asks
   them to choose one and say it twice (self-enrolment, no admin needed).
-- Becoming a CAREGIVER is privileged: the first caregiver can enrol freely, later ones need
-  an existing caregiver's passphrase.
 - Passphrases are CHANGED on the Family settings page (typed, never spoken - see
   settings.py), not by talking to the robot.
-- While nobody is registered at all the system runs in "open mode" (old behaviour).
+- The in-app UI (/medicine) is open by default — Dashboard, Database, History, Family, Debug.
 
-How a passphrase is checked
-- With the voice guard ON (recommended): a human must have SAID the passphrase in the
-  last 5 minutes - checked against the speech transcript, never against what the AI
-  passes in. The AI may have heard it earlier, but it can't replay it.
+How a passphrase is checked (only when require_passphrases is ON)
+- With the voice guard ON: a human must have SAID a registered passphrase in the last 5 minutes.
 - With the voice guard OFF: the tool argument `passphrase` is checked against the hash.
 Passphrases are never stored in clear, never returned, and never stored in memories.
 """
@@ -134,8 +129,8 @@ class PeopleAccessMixin:
         speak = f"For that I need {who} passphrase. Please say it."
         if not candidates:
             return self.guard.refuse(action, f"nobody can authorise this ({who})",
-                                     "Nobody who can approve that has a passphrase yet. "
-                                     "The caregiver can be set up on the Family settings page.")
+                                     "Nobody is registered yet. Add someone on the Family settings page, "
+                                     "or set up a passphrase by voice the first time.")
         if self.guard.enabled:
             ok = self.guard.wait_authenticated(lambda ids: any(p.id in ids for p in candidates))
             if ok:
@@ -147,22 +142,19 @@ class PeopleAccessMixin:
         return self.guard.refuse(action, f"{who} passphrase missing or wrong", speak)
 
     def _require_caregiver(self, action: str, body: dict[str, Any]) -> dict[str, Any] | None:
-        return self._require_auth(action, body, lambda p: p.is_caregiver, "the caregiver's")
+        """Legacy name: any registered person may authorise (caregiver-only gating disabled)."""
+        return self._require_auth(action, body, lambda p: True, "a family member's")
 
     def _require_owner(self, action: str, body: dict[str, Any], person: Person | None) -> dict[str, Any] | None:
-        """Changing someone's timetable / memories: their own passphrase, or a caregiver's."""
-        if person is None:  # unassigned (legacy) medicines: caregiver only
-            return self._require_caregiver(action, body)
-        return self._require_auth(
-            action, body, lambda p: p.is_caregiver or p.id == person.id, f"{person.name}'s"
-        )
+        """Any registered person's passphrase authorises timetable / memory changes (easy mode)."""
+        del person
+        return self._require_auth(action, body, lambda p: True, "a family member's")
 
     # ------------------------------------------------------------ people
     def register_person(self, body: dict[str, Any], *, typed: bool = False) -> dict[str, Any]:
         """First-time passphrase setup.
 
-        - role 'person': anyone can set up THEIR OWN passphrase the first time (self-enrolment).
-        - role 'caregiver': the first one freely; later ones need a caregiver's passphrase.
+        - role 'person' or 'caregiver': self-enrolment; caregiver is a label only (no extra gates).
         Spoken (typed=False): the new passphrase must be said twice (heard twice with the guard).
         Typed on the settings page (typed=True): it must be typed twice."""
         name = " ".join(str(body.get("name") or "").split())
@@ -176,17 +168,7 @@ class PeopleAccessMixin:
                     "speak_hint": "Please tell me the person's name again, in plain words."}
         if role not in ROLES:
             return {"error": f"role must be one of {ROLES}"}
-        if role == "caregiver" and self.db.has_caregiver():
-            # `passphrase` here is the NEW one; the existing caregiver proves themselves separately.
-            auth = {"passphrase": body.get("caregiver_passphrase")}
-            if typed:
-                cp = str(body.get("caregiver_passphrase") or "")
-                if not any(p.secret.matches(cp) for p in self.db.list_people() if p.is_caregiver):
-                    return {"error": "an existing caregiver's passphrase is needed to add another caregiver"}
-            else:
-                blocked = self._require_caregiver("register caregiver", auth)
-                if blocked:
-                    return blocked
+        # Caregiver-only approval for extra caregivers is disabled (ease of use).
         problem = validate_new_passphrase(phrase, name)
         if problem:
             return {"error": problem, "speak_hint": f"Please choose another passphrase: {problem}."}
@@ -273,9 +255,7 @@ class PeopleAccessMixin:
         if any(secret_in_text(p.secret, text) for p in self.db.list_people()):
             return {"error": "memory contains a passphrase",
                     "speak_hint": "That contains a passphrase, so I won't save it."}
-        blocked = self._require_auth(
-            "save memory", body, lambda p: p.is_caregiver or p.id == person.id, f"{person.name}'s or the caregiver's"
-        )
+        blocked = self._require_owner("save memory", body, person)
         if blocked:
             return blocked
         kind = str(body.get("kind") or "story").strip().lower()
@@ -354,9 +334,7 @@ class PeopleAccessMixin:
         mem = self.db.get_memory(memory_id)
         if mem is None or mem.person_id != person.id:
             return {"error": "no such memory for this person"}
-        blocked = self._require_auth(
-            "forget memory", body, lambda p: p.is_caregiver or p.id == person.id, f"{person.name}'s or the caregiver's"
-        )
+        blocked = self._require_owner("forget memory", body, person)
         if blocked:
             return blocked
         key = f"forget:{mem.id}"

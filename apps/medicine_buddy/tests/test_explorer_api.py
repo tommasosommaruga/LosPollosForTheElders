@@ -67,7 +67,21 @@ def _seed_doses(svc: MedicineBuddyService) -> None:
     svc.db.record_transition(asp.id, DoseState.TAKEN)
 
 
-def test_explorer_apis_require_sign_in(svc, client: TestClient) -> None:
+def test_explorer_apis_open_by_default(svc, client: TestClient) -> None:
+    _family(svc)
+    for path in (
+        "/medicine/api/activity",
+        "/medicine/api/search?q=Mario",
+        "/medicine/api/people",
+        "/medicine/api/reports/adherence",
+        "/medicine/api/agent",
+    ):
+        assert client.get(path).status_code == 200
+    assert client.get("/medicine/history").status_code == 200
+
+
+def test_explorer_apis_require_sign_in_when_locked(svc, client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("MEDICINE_BUDDY_REQUIRE_UI_LOGIN", "1")
     _family(svc)
     for path in (
         "/medicine/api/activity",
@@ -82,8 +96,7 @@ def test_explorer_apis_require_sign_in(svc, client: TestClient) -> None:
 
 def test_activity_dual_write_and_cursor(svc, client: TestClient) -> None:
     _family(svc)
-    _login(client)
-    # login + dashboard track → activity_events
+    # dashboard track → activity_events (open UI, no login)
     client.get("/medicine")
     assert svc.db.count_activity_events() >= 1
     r = client.get("/medicine/api/activity?limit=20")

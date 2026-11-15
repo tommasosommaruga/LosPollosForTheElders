@@ -63,6 +63,17 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Profile: freer emotions (`play_emotion`, `dance`, `move_head`, `sweep_look`, …); package version bumped (health uses `__version__`)
 - Tests: `test_listen_mode.py`, passphrase master-switch coverage in `test_family_settings.py`
 
+## v0.8.2 — open UI, no caregiver-only gates (done)
+
+- `/medicine` Dashboard, Database, History, Family, Debug open by default (no caregiver login)
+- Optional `MEDICINE_BUDDY_REQUIRE_UI_LOGIN=1` — any registered person's passphrase works
+- Voice: when passphrases ON, any family passphrase authorises changes (caregiver role is a label)
+
+## v0.8.1 — stock Reachy speech (done)
+
+- Removed patient-story VAD / `listen_patiently` turn-stretching; conversation uses normal Reachy Mini speech-to-speech again
+- Memories still work (`save_memory`); profile no longer asks for long-silence listening
+
 ## v0.8.0 — companion calendar (ICS) (done)
 
 - Bidirectional ICS: Family page subscribe URL (Outlook/Google/Apple) + paste import ICS URL

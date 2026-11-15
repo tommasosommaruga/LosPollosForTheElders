@@ -134,12 +134,11 @@ def test_passphrase_never_stored_or_returned(svc: MedicineBuddyService, tmp_path
     svc.db = Database(tmp_path / "p.db")
 
 
-def test_becoming_caregiver_needs_existing_caregiver(svc: MedicineBuddyService) -> None:
+def test_becoming_caregiver_no_longer_needs_existing_caregiver(svc: MedicineBuddyService) -> None:
+    """Caregiver is a label only — a second caregiver can enrol without the first's passphrase."""
     svc.register_person({"name": "Anna", "role": "caregiver", "passphrase": CARE, "passphrase_repeat": CARE})
-    bad = {"name": "Eve", "role": "caregiver", "passphrase": "quiet sneaky fox", "passphrase_repeat": "quiet sneaky fox"}
-    assert svc.register_person(bad)["blocked"] is True
-    assert svc.register_person({**bad, "caregiver_passphrase": "wrong words here"})["blocked"] is True
-    assert svc.register_person({**bad, "caregiver_passphrase": CARE})["status"] == "ok"
+    eve = {"name": "Eve", "role": "caregiver", "passphrase": "quiet sneaky fox", "passphrase_repeat": "quiet sneaky fox"}
+    assert svc.register_person(eve)["status"] == "ok"
     assert {p.name for p in svc.db.list_people() if p.is_caregiver} == {"Anna", "Eve"}
 
 
@@ -153,21 +152,19 @@ def test_duplicate_name_or_passphrase_rejected(svc: MedicineBuddyService) -> Non
     assert "already used" in r["speak_hint"]
 
 
-def test_own_passphrase_protects_own_timetable(svc: MedicineBuddyService) -> None:
+def test_any_family_passphrase_can_change_timetable(svc: MedicineBuddyService) -> None:
+    """Easy mode: when passphrases are ON, any registered passphrase authorises (not owner-only)."""
     _family(svc)
     add = {"person": "Mario", "name": "Aspirin", "weekdays": "daily", "time": "09:00"}
     assert svc.add_schedule(add)["blocked"] is True                            # no passphrase
-    assert svc.add_schedule({**add, "passphrase": ROSA})["blocked"] is True    # someone else's
-    r = svc.add_schedule({**add, "passphrase": MARIO})                         # his own
-    assert r["verified"] and r["speak_hint"] == "Done. Aspirin for Mario is set up correctly: every day at 9 AM."
+    assert svc.add_schedule({**add, "passphrase": "totally wrong phrase here"})["blocked"] is True
+    r = svc.add_schedule({**add, "passphrase": ROSA})                          # another family member OK
+    assert r["verified"] and "Aspirin" in r["speak_hint"] and "Mario" in r["speak_hint"]
 
     upd = {"person": "Mario", "name": "Aspirin", "new_time": "10:00"}
-    assert svc.update_schedule({**upd, "passphrase": ROSA})["blocked"] is True
-    assert svc.update_schedule({**upd, "passphrase": CARE})["verified"]        # caregiver override
-
+    assert svc.update_schedule({**upd, "passphrase": ROSA})["verified"]
     dele = {"person": "Mario", "name": "Aspirin", "confirmed": True}
     assert svc.delete_schedule(dele)["blocked"] is True
-    assert svc.delete_schedule({**dele, "passphrase": ROSA})["blocked"] is True
     assert svc.delete_schedule({**dele, "passphrase": MARIO})["verified"]
 
 
@@ -208,8 +205,8 @@ def test_save_and_recall_memories(svc: MedicineBuddyService) -> None:
     _family(svc)
     m = {"person": "Rosa", "kind": "recipe", "title": "Nonna's polenta", "text": POLENTA}
     assert svc.save_memory(m)["blocked"] is True                       # nobody proved themselves
-    assert svc.save_memory({**m, "passphrase": MARIO})["blocked"] is True  # Mario can't write Rosa's memories
-    r = svc.save_memory({**m, "passphrase": ROSA})
+    # Easy mode: any registered passphrase can save for anyone
+    r = svc.save_memory({**m, "passphrase": MARIO})
     assert r["verified"] and "Saved in Rosa's memories" in r["speak_hint"]
     svc.save_memory({"person": "Mario", "kind": "story", "title": "The winter of 1956",
                      "text": "The lake froze and we walked across it to the next village.", "passphrase": CARE})
@@ -235,11 +232,10 @@ def test_forget_memory_asks_first(svc: MedicineBuddyService) -> None:
     saved = svc.save_memory({"person": "Mario", "kind": "advice", "title": "Be patient",
                              "text": "Never rush the polenta.", "passphrase": MARIO})
     mid = saved["memory"]["id"]
-    assert svc.forget_memory({"person": "Mario", "memory_id": mid, "passphrase": ROSA})["blocked"] is True
     assert svc.forget_memory({"person": "Mario", "memory_id": mid, "confirmed": False,
-                              "passphrase": MARIO})["status"] == "needs_confirm"
+                              "passphrase": ROSA})["status"] == "needs_confirm"
     assert svc.forget_memory({"person": "Mario", "memory_id": mid, "confirmed": True,
-                              "passphrase": MARIO})["status"] == "ok"
+                              "passphrase": ROSA})["status"] == "ok"
     assert svc.db.list_memories() == []
 
 
@@ -345,15 +341,17 @@ def test_spoken_first_time_setup_then_own_list(gsvc: MedicineBuddyService, clock
                                  "passphrase_repeat": MARIO})["status"] == "ok"
     _say(gsvc, clock, "add my aspirin at nine every day")
     assert gsvc.add_schedule({"person": "Mario", "name": "Aspirin", "weekdays": "daily", "time": "09:00"})["verified"]
-    # Rosa's spoken passphrase can't touch Mario's list
+    # Easy mode: Rosa's spoken passphrase can also manage Mario's list
     _say(gsvc, clock, ROSA)
     _say(gsvc, clock, ROSA)
     gsvc.register_person({"name": "Rosa", "role": "person", "passphrase": ROSA, "passphrase_repeat": ROSA})
     clock.t += AUTH_WINDOW + 10
     _say(gsvc, clock, f"{ROSA}, delete mario's aspirin")
+    ask = gsvc.delete_schedule({"person": "Mario", "name": "Aspirin", "confirmed": False})
+    assert ask.get("status") == "needs_confirm"
+    _say(gsvc, clock, "yes please")
     r = gsvc.delete_schedule({"person": "Mario", "name": "Aspirin", "confirmed": True})
-    assert r["blocked"] is True
-    # ...but Rosa can save her own memories with it
+    assert r.get("verified") or r.get("status") == "ok"
     assert gsvc.save_memory({"person": "Rosa", "kind": "story", "title": "The lake",
                              "text": "It froze in 1956."})["verified"]
 

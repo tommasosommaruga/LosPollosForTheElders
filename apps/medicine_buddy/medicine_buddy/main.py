@@ -140,9 +140,8 @@ class MedicineBuddy(ReachyMiniApp):
         service, server, _ = start_server(host, port, db_path, AppConfig(dry_run=True), voice_guard=guard)
         _SERVICE = service
         _install_transcript_hook()
-        # Note: do NOT live-patch HuggingFace ServerVad via session.update — a partial
-        # audio update can mute TTS while transcripts still appear. listen_patiently
-        # stays a behavioral flag for the profile until we have a safe full-session apply.
+        # Never patch HuggingFace ServerVad — stock Reachy Mini speech-to-speech only.
+        # (Earlier patient-listen session.update muted TTS; that path is fully removed.)
         reminders = None
         checkins = None
         calendar_sync = None
@@ -177,7 +176,7 @@ class MedicineBuddy(ReachyMiniApp):
                 speaker.start()
             start_wake_greeting(service, speaker, stop_event)
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
-        logger.info("In-app pages (sign in with the caregiver passphrase): http://<this-machine>:7860/medicine")
+        logger.info("In-app pages (open by default): http://<this-machine>:7860/medicine")
         logger.info(
             "Database: %s  |  require passphrases: %s  |  voice guard: %s  |  wake greeting: %s  |  profile: %s (locked)",
             db_path, service.require_passphrases(), service.guard.enabled, wake_on, PROFILE,

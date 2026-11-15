@@ -58,29 +58,40 @@ def test_open_while_nobody_registered(client: TestClient) -> None:
     assert r.status_code == 200 and "Medicine Buddy" in r.text and "sign in" not in r.text.lower()
 
 
-def test_sign_in_required_once_people_exist(svc, client: TestClient) -> None:
+def test_open_access_shows_dashboard_without_login(svc, client: TestClient) -> None:
+    """Default: no caregiver login — Dashboard / Database / Family are open."""
     _family(svc)
-    page = client.get("/medicine").text
-    assert "caregiver's passphrase" in page and "Aspirin" not in page          # login page, no data
-    assert client.get("/medicine/debug/data").status_code == 401
-    assert client.get("/medicine/family", follow_redirects=False).status_code == 303
-    r = client.post("/medicine/login", json={"passphrase": MARIO})               # family member: not enough
-    assert r.status_code == 401
-    _login(client)
     dash = client.get("/medicine").text
-    assert "Aspirin" in dash and "Mario" in dash and "Anna (caregiver)" in dash
+    assert "Aspirin" in dash and "Mario" in dash
+    assert "sign in" not in dash.lower()
+    assert client.get("/medicine/family").status_code == 200
+    assert client.get("/medicine/data").status_code == 200
     for secret in (CARE, MARIO):
         assert secret not in dash
 
 
-def test_cookie_is_locked_down(svc, client: TestClient) -> None:
+def test_optional_ui_login_accepts_any_family_member(svc, client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("MEDICINE_BUDDY_REQUIRE_UI_LOGIN", "1")
+    _family(svc)
+    page = client.get("/medicine").text
+    assert "registered person's passphrase" in page.lower() or "family passphrase" in page.lower()
+    assert "Aspirin" not in page
+    assert client.get("/medicine/debug/data").status_code == 401
+    assert client.post("/medicine/login", json={"passphrase": MARIO}).status_code == 200  # not caregiver-only
+    dash = client.get("/medicine").text
+    assert "Aspirin" in dash and "Mario" in dash
+
+
+def test_cookie_is_locked_down(svc, client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("MEDICINE_BUDDY_REQUIRE_UI_LOGIN", "1")
     _family(svc)
     r = client.post("/medicine/login", json={"passphrase": CARE})
     cookie = r.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=strict" in cookie and "path=/medicine" in cookie
 
 
-def test_guessing_is_rate_limited(svc, client: TestClient) -> None:
+def test_guessing_is_rate_limited(svc, client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("MEDICINE_BUDDY_REQUIRE_UI_LOGIN", "1")
     _family(svc)
     for _ in range(MAX_FAILURES):
         assert client.post("/medicine/login", json={"passphrase": "wrong guess here"}).status_code == 401
@@ -91,7 +102,6 @@ def test_guessing_is_rate_limited(svc, client: TestClient) -> None:
 
 def test_family_settings_need_session_token(svc, client: TestClient) -> None:
     _family(svc)
-    _login(client)
     body = {"name": "Mario", "current": MARIO, "new": "blue garden kettle", "new_repeat": "blue garden kettle"}
     assert client.post("/medicine/settings/passphrase", json=body).status_code == 403          # no token
     assert client.post("/medicine/settings/passphrase", json=body,
@@ -103,7 +113,6 @@ def test_family_settings_need_session_token(svc, client: TestClient) -> None:
 
 def test_other_websites_refused(svc, client: TestClient) -> None:
     _family(svc)
-    _login(client)
     token = _token(client, "/medicine/family")
     evil = {"Origin": "https://evil.example", "X-Family-Token": token}
     assert client.post("/medicine/settings/suggest", json={}, headers=evil).status_code == 403
@@ -116,7 +125,6 @@ def test_debug_switch_and_snapshot(svc, client: TestClient) -> None:
     _family(svc)
     svc.voice_heard({"text": f"my passphrase is {MARIO}"})          # spoken passphrase: must never be shown
     svc.guard.authenticated()      # sentences are checked when something needs a passphrase; do that now
-    _login(client)
     token = _token(client, "/medicine/debug")
     assert svc.debug_enabled is False
     r = client.post("/medicine/debug/toggle", json={"enabled": True}, headers={"X-Family-Token": token})
@@ -126,7 +134,6 @@ def test_debug_switch_and_snapshot(svc, client: TestClient) -> None:
     snap = client.get("/medicine/debug/data").json()
     assert snap["debug"] is True and snap["data"]["people"] == 2 and snap["data"]["active_schedules"] == 1
     assert [u["name"] for u in snap["voice_guard"]["unlocked_people"]] == ["Mario"]
-    assert any(q["path"] == "/medicine/login" and q["status"] == 200 for q in snap["recent_requests"])
     text = json.dumps(snap)
     for secret in (CARE, MARIO, "fishing"):
         assert secret not in text
@@ -141,7 +148,8 @@ def test_request_log_keeps_http_status(svc: MedicineBuddyService) -> None:
     assert entry["status"] == 400 and entry["result"] == "needs_passphrase_setup"
 
 
-def test_logout(svc, client: TestClient) -> None:
+def test_logout_only_matters_when_ui_login_required(svc, client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("MEDICINE_BUDDY_REQUIRE_UI_LOGIN", "1")
     _family(svc)
     _login(client)
     assert client.get("/medicine/debug/data").status_code == 200
@@ -160,7 +168,6 @@ def test_starting_page_instead_of_404() -> None:
 
 def test_conversation_page_shows_text_and_hides_passphrases(svc, client: TestClient) -> None:
     _family(svc)
-    _login(client)
     svc.record_transcript("user", "what medicine should I take")
     svc.record_transcript("assistant", "You take Aspirin at nine.")
     svc.record_transcript("user", f"my passphrase is {MARIO}")
@@ -182,10 +189,9 @@ def test_conversation_page_shows_text_and_hides_passphrases(svc, client: TestCli
 
 def test_database_page_read_only_no_secrets(svc, client: TestClient) -> None:
     _family(svc)
-    assert client.get("/medicine/data/tables").status_code == 401
-    _login(client)
     assert "Database" in client.get("/medicine/data").text
     d = client.get("/medicine/data/tables").json()
+    assert client.get("/medicine/data/tables").status_code == 200
     names = {t["name"] for t in d["tables"]}
     assert {"people", "medicines", "schedules", "dose_events", "memories", "app_settings"} <= names
     blob = json.dumps(d).lower()

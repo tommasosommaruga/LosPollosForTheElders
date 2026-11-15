@@ -11,19 +11,19 @@ conversation settings at /):
     /medicine/debug    live debug view + the debug on/off switch
 
 That server listens on the whole network (so Reachy Mini Control can open it), unlike the
-:8787 API which is local-only. Therefore everything here needs a LOGIN:
-- the caregiver's passphrase (any registered person's while there is no caregiver yet;
-  open while nobody is registered at all - first-time setup),
-- at most 5 wrong attempts per device per 5 minutes,
-- session cookie: random, HttpOnly, SameSite=Strict, 30 min; every change also needs the
-  per-session token in X-Family-Token, and cross-site requests are refused.
-Known limit: the page is plain HTTP on the local network, so use it on a trusted network.
+:8787 API which is local-only.
+
+Default (ease): dashboard, Database, History, Family and Debug are OPEN — no caregiver login.
+Optional lock: MEDICINE_BUDDY_REQUIRE_UI_LOGIN=1 then any registered person's passphrase works
+(not caregiver-only). Changes still need the page token (X-Family-Token) and refuse cross-site
+requests. Known limit: plain HTTP on the local network — use a trusted network.
 """
 
 # No `from __future__ import annotations` here: FastAPI must see the real `Request` type
 # on the route functions, otherwise it treats `request` as a query parameter (HTTP 422).
 import hmac
 import json
+import os
 import secrets
 import time
 from typing import Any
@@ -90,8 +90,10 @@ def _nav(active: str, who: str) -> str:
         + link(f"{PREFIX}/family", "Family &amp; passphrases", "family")
         + link(f"{PREFIX}/debug", "Debug", "debug")
         + link("/", "Voice &amp; language settings", "voice")
-        + f'<span style="color:var(--muted,#888);margin-left:6px">signed in: {who_html}</span> '
-        + f'<a href="{PREFIX}/logout" style="margin-left:8px">Log out</a></div>'
+        + f'<span style="color:var(--muted,#888);margin-left:6px">{who_html}</span> '
+        + (f'<a href="{PREFIX}/logout" style="margin-left:8px">Log out</a>' if "open access" not in who.lower()
+           and "nobody registered" not in who.lower() else "")
+        + "</div>"
     )
 
 
@@ -148,11 +150,25 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
     def open_setup_mode() -> bool:
         return not service.db.list_people()
 
+    def ui_login_required() -> bool:
+        """Default off: anyone on the LAN can open Dashboard / Database / Family / Debug."""
+        return os.environ.get("MEDICINE_BUDDY_REQUIRE_UI_LOGIN", "0").lower() in {
+            "1", "true", "yes", "on",
+        }
+
     def session_for(request: Request) -> dict[str, Any] | None:
         s = sessions.get(request.cookies.get(COOKIE))
-        if s is None and open_setup_mode():
-            return {"who": "setup (nobody registered yet)", "csrf": "", "open": True}
-        return s
+        if s is not None:
+            return s
+        # Open access (default) or first-time setup: no passphrase gate; page token still required for POSTs.
+        if open_setup_mode() or not ui_login_required():
+            who = (
+                "setup (nobody registered yet)"
+                if open_setup_mode() else
+                "open access (no login)"
+            )
+            return {"who": who, "csrf": service.settings_token, "open": False}
+        return None
 
     def track(request: Request, status: int, start: float, payload: dict | None = None) -> None:
         service.record_request(request.method, request.url.path, status,
@@ -195,16 +211,18 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
             body = {}
         phrase = str((body or {}).get("passphrase") or "")
         people = service.db.list_people()
-        caregivers = [p for p in people if p.is_caregiver]
-        allowed = caregivers or people
-        who = next((p for p in allowed if phrase and p.secret.matches(phrase)), None)
+        # Any registered person may sign in when UI login is enabled (not caregiver-only).
+        who = next((p for p in people if phrase and p.secret.matches(phrase)), None)
         if who is None:
             sessions.failed(client)
             service.guard.refuse("web login", f"wrong passphrase from {client}", "")
             track(request, 401, start, {"error": "wrong passphrase"})
-            hint = "the caregiver's passphrase" if caregivers else "a family member's passphrase"
-            return JSONResponse({"error": f"That is not {hint}."}, 401)
-        token, _ = sessions.create(f"{who.name} ({'caregiver' if who.is_caregiver else 'family member'})")
+            names = ", ".join(p.name for p in people) or "nobody"
+            return JSONResponse({
+                "error": f"That is not a registered passphrase. Known people: {names}.",
+            }, 401)
+        label = "caregiver" if who.is_caregiver else "family member"
+        token, _ = sessions.create(f"{who.name} ({label})")
         track(request, 200, start, {"status": "ok"})
         resp = JSONResponse({"status": "ok"})
         resp.set_cookie(COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite="strict", path=PREFIX)
@@ -465,12 +483,14 @@ def _login_page() -> str:
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>Medicine Buddy - sign in</title>
 <style>{_BASE_CSS} .box{{max-width:420px;margin:12vh auto}}</style></head><body><main><div class="box">
-<h1>Medicine Buddy</h1><p class=muted>Sign in with the <b>caregiver's passphrase</b> to see the dashboard,
-history explorer, family settings and debug tools.</p>
-<section><form id=f><input id=p type=password autocomplete=current-password placeholder="Caregiver passphrase"
+<h1>Medicine Buddy</h1><p class=muted>UI login is enabled on this robot. Sign in with <b>any registered
+person's passphrase</b> (not only a caregiver) to open the dashboard, Database, History, Family and Debug.</p>
+<section><form id=f><input id=p type=password autocomplete=current-password placeholder="Family passphrase"
 style="width:100%;margin-bottom:10px" autofocus><button class=primary style="width:100%">Sign in</button></form>
 <p id=m class=bad></p></section>
 <p class=muted style="font-size:13px">Typed here, the passphrase never passes through Reachy's AI.
+Default installs leave this page open with no login
+(<code>MEDICINE_BUDDY_REQUIRE_UI_LOGIN=0</code>).
 <a href="/">Voice &amp; language settings</a></p></div></main>
 <script>
 document.getElementById("f").addEventListener("submit", async e => {{

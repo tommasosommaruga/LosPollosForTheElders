@@ -92,6 +92,8 @@ def _install_transcript_hook() -> None:
     def emit_and_guard(self, role: str, text: str, final: bool = True) -> None:
         original(self, role, text, final)
         service = _SERVICE
+        if service is not None and final:
+            service.record_transcript(role, text)   # live Conversation page (memory only)
         if service is not None and role == "user" and final and text and text.strip():
             # passphrase matching hashes words: keep it off the audio event loop
             threading.Thread(target=service.voice_heard, args=({"text": text.strip()},), daemon=True).start()

@@ -28,3 +28,5 @@ Medication care of the elderly:
         * Remind them about appointments.
         * Notify caregivers about missed check-ins
         * Interactive quizzes.
+        - process with ocr the prescription and setup automatically the weeks and the medicine to take when
+        - wacth the medicine being taken via the robot camera

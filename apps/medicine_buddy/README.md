@@ -37,8 +37,11 @@ pytest
 | `main.py` | **Reachy Mini app** (`MedicineBuddy`): conversation app + API + voice guard |
 | `conversation/` | Voice tools and the `medicine_caregiver` profile loaded by the conversation app |
 | `api.py` | HTTP API, status page `/`, family settings `/family` |
+| `web_ui.py` | In-app `/medicine` pages (dashboard, history, family, debug) + session auth |
+| `history_page.py` / `explorer_api.py` | History explorer UI + auth-gated `/medicine/api/*` |
 | `access.py` | People, passphrases, access control, family memories |
 | `settings.py` / `family_page.py` | Typed passphrase changes (never spoken) |
+| `debug.py` | Request activity (RAM + SQLite `activity_events`) and debug snapshot |
 | `voice_guard.py` | Medicine changes only when the person really said so |
 | `web_safety.py` / `catalog.py` | Web result cleaning; allowed medicine names |
 | `orchestrator.py` | `DoseStateMachine` |

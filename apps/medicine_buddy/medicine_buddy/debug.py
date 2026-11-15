@@ -19,6 +19,8 @@ from typing import Any
 
 _LOGGERS = ("medicine_buddy",)
 _OUTCOME_KEYS = ("status", "error", "blocked", "final_state", "verified", "speak_hint")
+# Length-only voice metadata — never the utterance text itself.
+_SAFE_EXTRA_KEYS = ("utterance_chars",)
 
 
 class DebugMixin:
@@ -38,17 +40,61 @@ class DebugMixin:
         logging.getLogger("medicine_buddy").info("Debug mode %s", "ON" if self.debug_enabled else "OFF")
         return {"debug": self.debug_enabled}
 
-    def record_request(self, method: str, path: str, status: int, ms: float,
-                       payload: dict[str, Any] | None = None, via: str = "api") -> None:
-        outcome = {}
+    def record_request(
+        self,
+        method: str,
+        path: str,
+        status: int,
+        ms: float,
+        payload: dict[str, Any] | None = None,
+        via: str = "api",
+        *,
+        person_id: int | None = None,
+    ) -> None:
+        outcome: dict[str, Any] = {}
         for k in _OUTCOME_KEYS:
             if payload and k in payload:
                 v = payload[k]
                 # the response's own "status" (e.g. "ok") must not overwrite the HTTP status code
                 outcome["result" if k == "status" else k] = v[:160] if isinstance(v, str) else v
-        entry = {"at": time.time(), "via": via, "method": method, "path": path.split("?")[0],
-                 "status": status, "ms": round(ms, 1), **outcome}
+        for k in _SAFE_EXTRA_KEYS:
+            if payload and k in payload and isinstance(payload[k], int):
+                outcome[k] = payload[k]
+        at_ts = time.time()
+        clean_path = path.split("?")[0]
+        entry = {
+            "at": at_ts,
+            "via": via,
+            "method": method,
+            "path": clean_path,
+            "status": status,
+            "ms": round(ms, 1),
+            **outcome,
+        }
+        if person_id is not None:
+            entry["person_id"] = person_id
         self.requests.append(entry)
+        try:
+            self.db.insert_activity_event(
+                at_ts=at_ts,
+                via=via,
+                method=method,
+                path=clean_path,
+                status=status,
+                ms=round(ms, 1),
+                result=outcome.get("result"),
+                error=outcome.get("error"),
+                blocked=outcome.get("blocked"),
+                final_state=outcome.get("final_state"),
+                verified=outcome.get("verified"),
+                speak_hint=outcome.get("speak_hint"),
+                utterance_chars=outcome.get("utterance_chars"),
+                person_id=person_id,
+            )
+        except Exception:  # noqa: BLE001 — never fail the HTTP request because logging failed
+            logging.getLogger("medicine_buddy").warning(
+                "Failed to persist activity event for %s %s", method, clean_path, exc_info=True
+            )
         if self.debug_enabled:
             logging.getLogger("medicine_buddy.requests").debug(
                 "%s %s %s -> %s (%.0f ms) %s", via, method, entry["path"], status, ms,
@@ -97,6 +143,7 @@ class DebugMixin:
                 "active_schedules": self.db.count_rows("schedules", "active = 1"),
                 "memories": self.db.count_rows("memories"),
                 "dose_events": self.db.count_rows("dose_events"),
+                "activity_events": self.db.count_rows("activity_events"),
             },
             "recent_requests": [
                 {**r, "at": datetime.fromtimestamp(r["at"]).strftime("%H:%M:%S")} for r in list(self.requests)[::-1][:60]

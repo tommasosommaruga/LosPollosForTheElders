@@ -6,8 +6,9 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,32 @@ class DoseEvent:
     slot_id: int | None
     detail: str
     created_at: str
+
+
+@dataclass(frozen=True)
+class ActivityEvent:
+    """Privacy-safe request/tool outcome. Never contains bodies, transcripts, or secrets."""
+
+    id: int
+    at_ts: float
+    via: str
+    method: str
+    path: str
+    status: int
+    ms: float
+    result: str | None = None
+    error: str | None = None
+    blocked: bool | None = None
+    final_state: str | None = None
+    verified: bool | None = None
+    speak_hint: str | None = None
+    utterance_chars: int | None = None
+    person_id: int | None = None
+
+
+# Keep the robot DB lean: drop oldest rows past this budget / age.
+ACTIVITY_MAX_ROWS = 5_000
+ACTIVITY_MAX_AGE_DAYS = 30
 
 
 def _schedule(row: sqlite3.Row) -> Schedule:
@@ -209,6 +236,24 @@ class Database:
                     detail TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS activity_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    at_ts REAL NOT NULL,
+                    via TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    status INTEGER NOT NULL,
+                    ms REAL NOT NULL,
+                    result TEXT,
+                    error TEXT,
+                    blocked INTEGER,
+                    final_state TEXT,
+                    verified INTEGER,
+                    speak_hint TEXT,
+                    utterance_chars INTEGER,
+                    person_id INTEGER REFERENCES people(id)
+                );
                 """
             )
             self._migrate_medicines_per_person()
@@ -216,6 +261,15 @@ class Database:
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_medicine_person_name "
                 "ON medicines (COALESCE(person_id, 0), name COLLATE NOCASE)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_activity_at ON activity_events (at_ts)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_activity_via ON activity_events (via)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_activity_person ON activity_events (person_id)"
             )
             self._conn.commit()
 
@@ -561,11 +615,477 @@ class Database:
             rows = self._all(sql + " ORDER BY id", tuple(params))
         return [_event(r) for r in rows]
 
-    _COUNTABLE = frozenset({"people", "medicines", "schedules", "memories", "dose_events"})
+    # ---- activity events (privacy-safe request / tool outcomes)
+    @staticmethod
+    def _activity(row: sqlite3.Row) -> ActivityEvent:
+        blocked = row["blocked"]
+        verified = row["verified"]
+        return ActivityEvent(
+            id=row["id"],
+            at_ts=float(row["at_ts"]),
+            via=row["via"],
+            method=row["method"],
+            path=row["path"],
+            status=int(row["status"]),
+            ms=float(row["ms"]),
+            result=row["result"],
+            error=row["error"],
+            blocked=None if blocked is None else bool(blocked),
+            final_state=row["final_state"],
+            verified=None if verified is None else bool(verified),
+            speak_hint=row["speak_hint"],
+            utterance_chars=row["utterance_chars"],
+            person_id=row["person_id"],
+        )
+
+    def insert_activity_event(
+        self,
+        *,
+        at_ts: float,
+        via: str,
+        method: str,
+        path: str,
+        status: int,
+        ms: float,
+        result: str | None = None,
+        error: str | None = None,
+        blocked: bool | None = None,
+        final_state: str | None = None,
+        verified: bool | None = None,
+        speak_hint: str | None = None,
+        utterance_chars: int | None = None,
+        person_id: int | None = None,
+    ) -> ActivityEvent:
+        """Insert one activity row and prune old / excess rows. Safe fields only."""
+        with self._lock:
+            cur = self._conn.execute(
+                """INSERT INTO activity_events
+                   (at_ts, via, method, path, status, ms, result, error, blocked,
+                    final_state, verified, speak_hint, utterance_chars, person_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    at_ts, via, method, path, status, ms,
+                    result, error,
+                    None if blocked is None else int(blocked),
+                    final_state,
+                    None if verified is None else int(verified),
+                    speak_hint, utterance_chars, person_id,
+                ),
+            )
+            event_id = int(cur.lastrowid)
+            self._prune_activity_events_locked()
+            self._conn.commit()
+            row = self._conn.execute("SELECT * FROM activity_events WHERE id = ?", (event_id,)).fetchone()
+            assert row is not None
+            return self._activity(row)
+
+    def _prune_activity_events_locked(self) -> None:
+        """Caller holds the lock. Drop rows older than ACTIVITY_MAX_AGE_DAYS, then cap row count."""
+        cutoff = time.time() - (ACTIVITY_MAX_AGE_DAYS * 86400)
+        self._conn.execute("DELETE FROM activity_events WHERE at_ts < ?", (cutoff,))
+        count = self._conn.execute("SELECT COUNT(*) AS n FROM activity_events").fetchone()["n"]
+        if count > ACTIVITY_MAX_ROWS:
+            excess = int(count) - ACTIVITY_MAX_ROWS
+            self._conn.execute(
+                "DELETE FROM activity_events WHERE id IN "
+                "(SELECT id FROM activity_events ORDER BY id ASC LIMIT ?)",
+                (excess,),
+            )
+
+    def _activity_filters(
+        self,
+        *,
+        since_id: int | None = None,
+        via: str | None = None,
+        status_min: int | None = None,
+        status_max: int | None = None,
+        path_prefix: str | None = None,
+        person_id: int | None = None,
+        since_ts: float | None = None,
+        until_ts: float | None = None,
+    ) -> tuple[str, list[Any]]:
+        clauses: list[str] = ["1=1"]
+        params: list[Any] = []
+        if since_id is not None:
+            clauses.append("id > ?")
+            params.append(since_id)
+        if via:
+            clauses.append("via = ?")
+            params.append(via)
+        if status_min is not None:
+            clauses.append("status >= ?")
+            params.append(status_min)
+        if status_max is not None:
+            clauses.append("status <= ?")
+            params.append(status_max)
+        if path_prefix:
+            clauses.append("path LIKE ?")
+            params.append(path_prefix + "%")
+        if person_id is not None:
+            clauses.append("person_id = ?")
+            params.append(person_id)
+        if since_ts is not None:
+            clauses.append("at_ts >= ?")
+            params.append(since_ts)
+        if until_ts is not None:
+            clauses.append("at_ts <= ?")
+            params.append(until_ts)
+        return " AND ".join(clauses), params
+
+    def query_activity_events(
+        self,
+        *,
+        since_id: int | None = None,
+        via: str | None = None,
+        status_min: int | None = None,
+        status_max: int | None = None,
+        path_prefix: str | None = None,
+        person_id: int | None = None,
+        since_ts: float | None = None,
+        until_ts: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ActivityEvent]:
+        where, params = self._activity_filters(
+            since_id=since_id, via=via, status_min=status_min, status_max=status_max,
+            path_prefix=path_prefix, person_id=person_id, since_ts=since_ts, until_ts=until_ts,
+        )
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        # Cursor mode (since_id): ascending so callers append. Otherwise newest first.
+        order = "id ASC" if since_id is not None else "id DESC"
+        rows = self._all(
+            f"SELECT * FROM activity_events WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        )
+        return [self._activity(r) for r in rows]
+
+    def count_activity_events(
+        self,
+        *,
+        since_id: int | None = None,
+        via: str | None = None,
+        status_min: int | None = None,
+        status_max: int | None = None,
+        path_prefix: str | None = None,
+        person_id: int | None = None,
+        since_ts: float | None = None,
+        until_ts: float | None = None,
+    ) -> int:
+        where, params = self._activity_filters(
+            since_id=since_id, via=via, status_min=status_min, status_max=status_max,
+            path_prefix=path_prefix, person_id=person_id, since_ts=since_ts, until_ts=until_ts,
+        )
+        row = self._one(f"SELECT COUNT(*) AS n FROM activity_events WHERE {where}", tuple(params))
+        return int(row["n"])
+
+    def get_activity_event(self, event_id: int) -> ActivityEvent | None:
+        row = self._one("SELECT * FROM activity_events WHERE id = ?", (event_id,))
+        return None if row is None else self._activity(row)
+
+    def get_dose_event_detail(self, event_id: int) -> dict[str, Any] | None:
+        row = self._one(
+            """SELECT e.id, e.medicine_id, e.state, e.slot_id, e.detail, e.created_at,
+                      med.name AS medicine_name, med.person_id, p.name AS person_name
+               FROM dose_events e
+               JOIN medicines med ON med.id = e.medicine_id
+               LEFT JOIN people p ON p.id = med.person_id
+               WHERE e.id = ?""",
+            (event_id,),
+        )
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "medicine_id": row["medicine_id"],
+            "medicine_name": row["medicine_name"],
+            "person_id": row["person_id"],
+            "person_name": row["person_name"],
+            "state": row["state"],
+            "slot_id": row["slot_id"],
+            "detail": row["detail"],
+            "created_at": row["created_at"],
+        }
+
+    # ---- explorer search helpers
+    def search_people(self, query: str) -> list[Person]:
+        """Exact name_key match, or prefix on name_key. Never fuzzy (Maria must not match Mario)."""
+        key = name_key(query)
+        if not key:
+            return []
+        exact = self.get_person_by_name(query)
+        if exact is not None:
+            return [exact]
+        rows = self._all(
+            "SELECT * FROM people WHERE name_key LIKE ? ORDER BY name",
+            (key + "%",),
+        )
+        return [self._person(r) for r in rows]
+
+    def search_memories(
+        self,
+        text: str | None = None,
+        *,
+        person_id: int | None = None,
+        kind: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Memory hits with person attribution (id + name). Text match is substring, case-insensitive."""
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if person_id is not None:
+            clauses.append("m.person_id = ?")
+            params.append(person_id)
+        if kind:
+            clauses.append("m.kind = ?")
+            params.append(kind)
+        if since:
+            clauses.append("m.created_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("m.created_at <= ?")
+            params.append(until)
+        if text and text.strip():
+            clauses.append("(m.title LIKE ? OR m.text LIKE ? OR m.kind LIKE ?)")
+            needle = f"%{text.strip()}%"
+            params.extend([needle, needle, needle])
+        where = " AND ".join(clauses)
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        rows = self._all(
+            f"""SELECT m.*, p.name AS person_name FROM memories m
+                JOIN people p ON p.id = m.person_id
+                WHERE {where} ORDER BY m.id DESC LIMIT ? OFFSET ?""",
+            (*params, limit, offset),
+        )
+        return [
+            {
+                "id": r["id"],
+                "person_id": r["person_id"],
+                "person_name": r["person_name"],
+                "kind": r["kind"],
+                "title": r["title"],
+                "text": r["text"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def count_memories_search(
+        self,
+        text: str | None = None,
+        *,
+        person_id: int | None = None,
+        kind: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> int:
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if person_id is not None:
+            clauses.append("person_id = ?")
+            params.append(person_id)
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if since:
+            clauses.append("created_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("created_at <= ?")
+            params.append(until)
+        if text and text.strip():
+            clauses.append("(title LIKE ? OR text LIKE ? OR kind LIKE ?)")
+            needle = f"%{text.strip()}%"
+            params.extend([needle, needle, needle])
+        row = self._one(
+            f"SELECT COUNT(*) AS n FROM memories WHERE {' AND '.join(clauses)}", tuple(params)
+        )
+        return int(row["n"])
+
+    def query_dose_events(
+        self,
+        *,
+        person_id: int | None = None,
+        medicine_id: int | None = None,
+        state: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Dose events with medicine + person attribution. Newest first."""
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if person_id is not None:
+            clauses.append("med.person_id = ?")
+            params.append(person_id)
+        if medicine_id is not None:
+            clauses.append("e.medicine_id = ?")
+            params.append(medicine_id)
+        if state:
+            clauses.append("e.state = ?")
+            params.append(state)
+        if since:
+            clauses.append("e.created_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("e.created_at <= ?")
+            params.append(until)
+        where = " AND ".join(clauses)
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        rows = self._all(
+            f"""SELECT e.id, e.medicine_id, e.state, e.slot_id, e.detail, e.created_at,
+                       med.name AS medicine_name, med.person_id,
+                       p.name AS person_name
+                FROM dose_events e
+                JOIN medicines med ON med.id = e.medicine_id
+                LEFT JOIN people p ON p.id = med.person_id
+                WHERE {where}
+                ORDER BY e.id DESC LIMIT ? OFFSET ?""",
+            (*params, limit, offset),
+        )
+        return [
+            {
+                "id": r["id"],
+                "medicine_id": r["medicine_id"],
+                "medicine_name": r["medicine_name"],
+                "person_id": r["person_id"],
+                "person_name": r["person_name"],
+                "state": r["state"],
+                "slot_id": r["slot_id"],
+                "detail": r["detail"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def count_dose_events_query(
+        self,
+        *,
+        person_id: int | None = None,
+        medicine_id: int | None = None,
+        state: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> int:
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if person_id is not None:
+            clauses.append("med.person_id = ?")
+            params.append(person_id)
+        if medicine_id is not None:
+            clauses.append("e.medicine_id = ?")
+            params.append(medicine_id)
+        if state:
+            clauses.append("e.state = ?")
+            params.append(state)
+        if since:
+            clauses.append("e.created_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("e.created_at <= ?")
+            params.append(until)
+        row = self._one(
+            f"""SELECT COUNT(*) AS n FROM dose_events e
+                JOIN medicines med ON med.id = e.medicine_id
+                WHERE {' AND '.join(clauses)}""",
+            tuple(params),
+        )
+        return int(row["n"])
+
+    def adherence_report(self, person_id: int | None = None, days: int = 7) -> dict[str, Any]:
+        """Aggregate Taken / Missed / Failed from real dose_events in the last `days`."""
+        days = max(1, min(int(days), 90))
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat()
+        clauses = ["e.created_at >= ?", "e.state IN ('Taken', 'Missed', 'Failed')"]
+        params: list[Any] = [since]
+        if person_id is not None:
+            clauses.append("med.person_id = ?")
+            params.append(person_id)
+        rows = self._all(
+            f"""SELECT e.state, COUNT(*) AS n FROM dose_events e
+                JOIN medicines med ON med.id = e.medicine_id
+                WHERE {' AND '.join(clauses)}
+                GROUP BY e.state""",
+            tuple(params),
+        )
+        counts = {"Taken": 0, "Missed": 0, "Failed": 0}
+        for r in rows:
+            if r["state"] in counts:
+                counts[r["state"]] = int(r["n"])
+        total = sum(counts.values())
+        taken = counts["Taken"]
+        return {
+            "days": days,
+            "since": since,
+            "person_id": person_id,
+            "taken": taken,
+            "missed": counts["Missed"],
+            "failed": counts["Failed"],
+            "total_terminal": total,
+            "adherence_pct": round(100.0 * taken / total, 1) if total else None,
+        }
+
+    def get_person_records(self, person_id: int) -> dict[str, Any] | None:
+        """Full person dossier for the explorer. None if the person does not exist."""
+        person = self.get_person(person_id)
+        if person is None:
+            return None
+        medicines = self.list_medicines(person_id, all_people=False)
+        schedules = []
+        for med in medicines:
+            for s in self.list_schedules_for_medicine(med.id, active_only=False):
+                schedules.append({
+                    "id": s.id,
+                    "medicine_id": med.id,
+                    "medicine_name": med.name,
+                    "weekdays": s.weekdays,
+                    "time_hhmm": s.time_hhmm,
+                    "timezone": s.timezone,
+                    "active": s.active,
+                })
+        memories = [
+            {
+                "id": m.id,
+                "kind": m.kind,
+                "title": m.title,
+                "text": m.text,
+                "created_at": m.created_at,
+            }
+            for m in self.list_memories(person_id=person_id, limit=100)
+        ]
+        doses = self.query_dose_events(person_id=person_id, limit=50)
+        return {
+            "person": public_person(person),
+            "medicines": [{"id": m.id, "name": m.name, "person_id": m.person_id} for m in medicines],
+            "schedules": schedules,
+            "memories": memories,
+            "dose_events": doses,
+            "counts": {
+                "medicines": len(medicines),
+                "schedules": len(schedules),
+                "memories": self.count_memories_search(person_id=person_id),
+                "dose_events": self.count_dose_events_query(person_id=person_id),
+                "activity": self.count_activity_events(person_id=person_id),
+            },
+        }
+
+    _COUNTABLE = frozenset({"people", "medicines", "schedules", "memories", "dose_events", "activity_events"})
 
     def count_rows(self, table: str, where: str = "") -> int:
         """COUNT(*) of a known table (the pages refresh often: never load whole tables to count them)."""
         if table not in self._COUNTABLE:
             raise ValueError(f"cannot count {table!r}")
+        # where is only used with trusted literals from our own code (e.g. "active = 1")
         row = self._one(f"SELECT COUNT(*) AS n FROM {table}" + (f" WHERE {where}" if where else ""))
         return int(row["n"])
+
+
+def public_person(person: Person) -> dict[str, Any]:
+    """Serialize a person for API/UI responses — never includes passphrase material."""
+    return {"id": person.id, "name": person.name, "role": person.role, "is_caregiver": person.is_caregiver}

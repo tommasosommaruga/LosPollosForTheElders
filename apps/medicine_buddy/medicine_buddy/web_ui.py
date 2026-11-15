@@ -3,6 +3,10 @@
 Mounted under /medicine on the app's settings server (port 7860, next to Pollen's
 conversation settings at /):
     /medicine          dashboard (people, schedules, due now, memories, dose log, security)
+    /medicine/history  activity timeline, search, people explorer, adherence reports
+    /medicine/people/{id}  per-person dossier
+    /medicine/records/{kind}/{id}  record detail
+    /medicine/api/*    auth-gated JSON for the explorer (session cookie)
     /medicine/family   passphrases and people (typed, never spoken)
     /medicine/debug    live debug view + the debug on/off switch
 
@@ -25,7 +29,9 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+from medicine_buddy import explorer_api
 from medicine_buddy.family_page import render_family_page
+from medicine_buddy.history_page import render_history_page, render_person_page, render_record_page
 
 PREFIX = "/medicine"
 COOKIE = "mb_session"
@@ -78,6 +84,7 @@ def _nav(active: str, who: str) -> str:
     return (
         '<div style="font-size:14px;font-weight:500;margin:6px 0 2px">'
         + link(PREFIX, "Dashboard", "dash")
+        + link(f"{PREFIX}/history", "History", "history")
         + link(f"{PREFIX}/family", "Family &amp; passphrases", "family")
         + link(f"{PREFIX}/debug", "Debug", "debug")
         + link("/", "Voice &amp; language settings", "voice")
@@ -244,6 +251,99 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         track(request, status, start, payload)
         return JSONResponse(payload, status)
 
+    # ------------------------------------------------------------------ history / explorer
+    @app.get(f"{PREFIX}/history")
+    def history_page(request: Request):
+        s = session_for(request)
+        if s is None:
+            return RedirectResponse(PREFIX, status_code=303)
+        return html(render_history_page(
+            s["csrf"], _nav("history", s["who"]), base_css=_BASE_CSS, prefix=PREFIX,
+        ))
+
+    @app.get(PREFIX + "/people/{person_id}")
+    def person_page(person_id: int, request: Request):
+        s = session_for(request)
+        if s is None:
+            return RedirectResponse(PREFIX, status_code=303)
+        dossier = explorer_api.person_records_response(service.db, person_id)
+        status = 404 if "error" in dossier else 200
+        return html(
+            render_person_page(
+                s["csrf"], _nav("history", s["who"]), person_id, dossier,
+                base_css=_BASE_CSS, prefix=PREFIX,
+            ),
+            status=status,
+        )
+
+    @app.get(PREFIX + "/records/{kind}/{record_id}")
+    def record_page(kind: str, record_id: int, request: Request):
+        s = session_for(request)
+        if s is None:
+            return RedirectResponse(PREFIX, status_code=303)
+        record = explorer_api.record_detail_response(service.db, kind, record_id)
+        status = 404 if "error" in record else 200
+        return html(
+            render_record_page(
+                s["csrf"], _nav("history", s["who"]), kind, record,
+                base_css=_BASE_CSS, prefix=PREFIX,
+            ),
+            status=status,
+        )
+
+    def _query_params(request: Request) -> dict[str, Any]:
+        return {k: v for k, v in request.query_params.multi_items()}
+
+    def _api_json(payload: dict[str, Any]) -> JSONResponse:
+        if "error" in payload:
+            err = str(payload["error"])
+            status = 404 if err.startswith("no ") else 400
+        else:
+            status = 200
+        return JSONResponse(payload, status_code=status, headers=headers())
+
+    @app.get(f"{PREFIX}/api/activity")
+    def api_activity(request: Request):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return _api_json(explorer_api.activity_response(service.db, _query_params(request)))
+
+    @app.get(f"{PREFIX}/api/search")
+    def api_search(request: Request):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return _api_json(explorer_api.search_response(service.db, _query_params(request)))
+
+    @app.get(f"{PREFIX}/api/people")
+    def api_people(request: Request):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return _api_json(explorer_api.people_list_response(service.db))
+
+    @app.get(PREFIX + "/api/people/{person_id}/records")
+    def api_person_records(person_id: int, request: Request):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return _api_json(explorer_api.person_records_response(service.db, person_id))
+
+    @app.get(PREFIX + "/api/records/{kind}/{record_id}")
+    def api_record_detail(kind: str, record_id: int, request: Request):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return _api_json(explorer_api.record_detail_response(service.db, kind, record_id))
+
+    @app.get(f"{PREFIX}/api/reports/adherence")
+    def api_adherence(request: Request):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return _api_json(explorer_api.adherence_response(service.db, _query_params(request)))
+
+    @app.get(f"{PREFIX}/api/agent")
+    def api_agent(request: Request):
+        if session_for(request) is None:
+            return JSONResponse({"error": "please sign in again"}, 401)
+        return _api_json(explorer_api.agent_status_response(service))
+
     # ------------------------------------------------------------------ debug
     @app.get(f"{PREFIX}/debug")
     def debug_page(request: Request):
@@ -310,7 +410,7 @@ def _login_page() -> str:
 <meta name=viewport content="width=device-width, initial-scale=1"><title>Medicine Buddy - sign in</title>
 <style>{_BASE_CSS} .box{{max-width:420px;margin:12vh auto}}</style></head><body><main><div class="box">
 <h1>Medicine Buddy</h1><p class=muted>Sign in with the <b>caregiver's passphrase</b> to see the dashboard,
-family settings and debug tools.</p>
+history explorer, family settings and debug tools.</p>
 <section><form id=f><input id=p type=password autocomplete=current-password placeholder="Caregiver passphrase"
 style="width:100%;margin-bottom:10px" autofocus><button class=primary style="width:100%">Sign in</button></form>
 <p id=m class=bad></p></section>

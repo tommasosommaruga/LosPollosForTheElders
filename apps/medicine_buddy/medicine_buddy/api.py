@@ -78,7 +78,13 @@ class MedicineBuddyService(PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMi
         if not text:
             return {"error": "text is required"}
         u = self.guard.heard(text)
-        return {"status": "ok", "medicines": sorted(u.medicines), "yes": u.yes}
+        # Activity log gets length only — never the utterance text.
+        return {
+            "status": "ok",
+            "medicines": sorted(u.medicines),
+            "yes": u.yes,
+            "utterance_chars": len(text),
+        }
 
     def security(self) -> dict[str, Any]:
         return self.guard.status()

@@ -228,13 +228,17 @@ reachy-mini-app-assistant check apps/medicine_buddy      # validate the app pack
   ("the arm is only simulated... please take it from your own box") instead of claiming it brought the
   medicine, and the pages show a DEMO MODE banner.
 
-### In-app pages: dashboard, family settings, debug
+### In-app pages: dashboard, history, family settings, debug
 
 When Medicine Buddy runs, Reachy Mini Control opens **`http://<robot>:7860/medicine`** (from a laptop run:
 http://127.0.0.1:7860/medicine). Sign in with the **caregiver's passphrase** (typed; open while nobody is
 registered; any family member's while there is no caregiver yet). Then:
 
 - **Dashboard** - people, schedules, due now, family memories, dose log, security.
+- **History** - agent activity timeline (cursor refresh), cross-entity search (people / stories /
+  doses / medicines / activity), per-person dossiers, record detail pages, and adherence reports
+  (7/30 days). Backed by SQLite (`activity_events` + existing tables). Person filters use **exact**
+  name match only (Maria never merges with Mario). Auth-gated JSON under `/medicine/api/*`.
 - **Family & passphrases** - change passphrases, suggest easy ones, add people.
 - **Debug** - live view every 3 s: versions, database, voice guard (who is unlocked and for how long,
   open confirmation questions, blocked attempts), data counts, and the recent requests with their
@@ -244,7 +248,8 @@ registered; any family member's while there is no caregiver yet). Then:
 
 These pages are on the local network, so they need the sign-in: 5 wrong attempts lock that device
 out for a few minutes, the session cookie is HttpOnly/SameSite=Strict, and changes need a per-session
-token. They're plain HTTP, so use them on a network you trust.
+token. They're plain HTTP, so use them on a network you trust. Passphrase hashes and utterance text
+are never exposed in History or Debug.
 
 Passphrases are **changed on the Family settings page** (typed, never spoken). Medicine names are
 limited to [`medicine_catalog.json`](apps/medicine_buddy/medicine_buddy/medicine_catalog.json).

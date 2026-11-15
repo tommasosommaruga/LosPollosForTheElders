@@ -77,6 +77,7 @@ class Memory:
     title: str
     text: str
     created_at: str
+    tone_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -236,6 +237,7 @@ class Database:
                     kind TEXT NOT NULL,
                     title TEXT NOT NULL,
                     text TEXT NOT NULL,
+                    tone_note TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 );
 
@@ -307,6 +309,7 @@ class Database:
             self._migrate_medicines_per_person()
             self._migrate_people_name_key()
             self._migrate_calendar_external_id()
+            self._migrate_memory_tone_note()
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_medicine_person_name "
                 "ON medicines (COALESCE(person_id, 0), name COLLATE NOCASE)"
@@ -346,6 +349,14 @@ class Database:
             if r["name_key"] != key:
                 self._conn.execute("UPDATE people SET name_key = ? WHERE id = ?", (key, r["id"]))
         self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_people_name_key ON people (name_key)")
+
+    def _migrate_memory_tone_note(self) -> None:
+        """Optional short delivery cue for verbatim recall (warm, laughing, …)."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(memories)")}
+        if "tone_note" not in cols:
+            self._conn.execute(
+                "ALTER TABLE memories ADD COLUMN tone_note TEXT NOT NULL DEFAULT ''"
+            )
 
     def _migrate_calendar_external_id(self) -> None:
         """Store Google Calendar event ids for voice create/cancel push."""
@@ -459,20 +470,34 @@ class Database:
     # ---- memories (stories, recipes, skills, traditions ...)
     @staticmethod
     def _memory(r: sqlite3.Row) -> Memory:
-        return Memory(r["id"], r["person_id"], r["kind"], r["title"], r["text"], r["created_at"])
+        keys = r.keys()
+        tone = str(r["tone_note"] if "tone_note" in keys else "") or ""
+        return Memory(
+            r["id"], r["person_id"], r["kind"], r["title"], r["text"], r["created_at"], tone
+        )
 
-    def add_memory(self, person_id: int, kind: str, title: str, text: str) -> Memory:
+    def add_memory(
+        self,
+        person_id: int,
+        kind: str,
+        title: str,
+        text: str,
+        *,
+        tone_note: str = "",
+    ) -> Memory:
         body = text.strip()
         if not body:
             raise ValueError("Memory text must not be empty")
         kind = kind if kind in MEMORY_KINDS else "other"
         title = " ".join(title.split())[:120] or body.split(".")[0][:60]
+        tone = " ".join(str(tone_note or "").split())[:120]
         now = utc_now_iso()
         cur = self._write(
-            "INSERT INTO memories (person_id, kind, title, text, created_at) VALUES (?, ?, ?, ?, ?)",
-            (person_id, kind, title, body, now),
+            "INSERT INTO memories (person_id, kind, title, text, tone_note, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (person_id, kind, title, body, tone, now),
         )
-        return Memory(int(cur.lastrowid), person_id, kind, title, body, now)
+        return Memory(int(cur.lastrowid), person_id, kind, title, body, now, tone)
 
     def get_memory(self, memory_id: int) -> Memory | None:
         row = self._one("SELECT * FROM memories WHERE id = ?", (memory_id,))

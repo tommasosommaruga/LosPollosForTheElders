@@ -207,7 +207,7 @@ def test_save_and_recall_memories(svc: MedicineBuddyService) -> None:
     assert svc.save_memory(m)["blocked"] is True                       # nobody proved themselves
     # Easy mode: any registered passphrase can save for anyone
     r = svc.save_memory({**m, "passphrase": MARIO})
-    assert r["verified"] and "Saved in Rosa's memories" in r["speak_hint"]
+    assert r["verified"] and "rosa's memories" in r["speak_hint"].lower()
     assert r["memory"]["text"] == POLENTA
     assert r["chars_saved"] == len(POLENTA)
     svc.save_memory({"person": "Mario", "kind": "story", "title": "The winter of 1956",
@@ -216,7 +216,11 @@ def test_save_and_recall_memories(svc: MedicineBuddyService) -> None:
     # the grandson asks by name, misheard / with a family word in front
     got = svc.recall_memories({"person": "nonna rosa", "topic": "polenta"})
     assert got["person"]["name"] == "Rosa" and got["memories"][0]["text"] == POLENTA
-    assert "EVERY detail" in got["speak_hint"] or "complete" in got["speak_hint"].lower()
+    assert (
+        "word for word" in got["speak_hint"].lower()
+        or "verbatim" in got["speak_hint"].lower()
+        or "exactly" in got["speak_hint"].lower()
+    )
     assert svc.recall_memories({"person": "Mario", "kind": "recipe"})["total_matching"] == 0
     assert svc.recall_memories({"person": "Mario"})["memories"][0]["title"] == "The winter of 1956"
     assert "don't know anyone called" in svc.recall_memories({"person": "Giuseppe"})["speak_hint"]
@@ -253,7 +257,58 @@ def test_save_memory_prefers_full_spoken_transcript_over_short_summary(
 
     told = svc.recall_memories({"person": "Mario", "topic": "hackathon"})
     assert "beast of this hackathon" in told["memories"][0]["text"].lower()
-    assert "summar" in told["speak_hint"].lower() or "EVERY detail" in told["speak_hint"]
+    hint = told["speak_hint"].lower()
+    assert "word for word" in hint or "verbatim" in hint or "exactly" in hint
+
+
+def test_save_memory_stores_tone_note_and_confirms_saving(svc: MedicineBuddyService) -> None:
+    _family(svc)
+    r = svc.save_memory({
+        "person": "Mario",
+        "kind": "story",
+        "title": "Uncle Marco",
+        "text": "Uncle Marco picked me up every time I fell.",
+        "tone_note": "warm, laughing",
+        "passphrase": MARIO,
+    })
+    assert r["verified"] is True
+    assert r["memory"]["tone_note"] == "warm, laughing"
+    assert "saving" in r["speak_hint"].lower() or "saved" in r["speak_hint"].lower()
+    got = svc.recall_memories({"person": "Mario", "topic": "Marco"})
+    assert got["memories"][0]["tone_note"] == "warm, laughing"
+    assert "word for word" in got["speak_hint"].lower() or "exactly" in got["speak_hint"].lower()
+    assert "warm" in got["speak_hint"].lower() or "tone" in got["speak_hint"].lower()
+
+
+def test_save_memory_fast_when_passphrases_off(tmp_path: Path) -> None:
+    """Demo mode must not PBKDF2-scan a long story (that caused robot tool timeouts)."""
+    import time
+
+    s = MedicineBuddyService(
+        tmp_path / "fast.db",
+        AppConfig(dry_run=True, tray_labels=["ASPIRIN"]),
+        MedicineCatalog({"Aspirin": []}),
+    )
+    try:
+        assert s.require_passphrases() is False
+        # Demo auto-registers people without spoken passphrase setup.
+        long_story = ("Once upon a time in the village " * 80).strip()
+        assert len(long_story.split()) > 300
+        t0 = time.perf_counter()
+        r = s.save_memory({
+            "person": "Tommaso",
+            "kind": "story",
+            "title": "Village summers",
+            "text": long_story,
+            "tone_note": "nostalgic, soft",
+        })
+        elapsed = time.perf_counter() - t0
+        assert r.get("verified") is True, r
+        assert r["memory"]["text"] == long_story
+        assert r["memory"]["tone_note"] == "nostalgic, soft"
+        assert elapsed < 2.0, f"save took {elapsed:.2f}s — passphrase scan still too slow"
+    finally:
+        s.close()
 
 
 def test_memory_cannot_contain_a_passphrase(svc: MedicineBuddyService) -> None:

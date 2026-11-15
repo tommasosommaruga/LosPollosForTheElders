@@ -25,18 +25,21 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
 class SaveMemory(Tool):
     name = "save_memory"
     description = (
-        "Save something a person wants to pass on to their children and grandchildren: a story, "
-        "recipe, skill, tradition, advice or piece of family history. ONLY call this after you asked "
-        "'Would you like me to save this in your memories?' and they said yes (or they clearly asked "
-        "you to save it). CRITICAL: put the COMPLETE story in `text` — every sentence, joke, feeling, "
-        "name and aside they said. NEVER summarize, shorten, or paraphrase. For a recipe keep every "
-        "ingredient and step. The server may also keep their recent spoken words if your text is too "
-        "short. Saving may need that person's passphrase. Never include a passphrase in the text."
+        "Save a story, recipe, skill, tradition, advice or family history. Call ONLY after they said "
+        "yes to saving (or clearly asked you to save). BEFORE calling, briefly say you are saving it "
+        "in their memories now. Prefer: ask name → listen_patiently(start, person=…) → they tell → "
+        "ask to save → speak 'saving…' → save_memory. Pass the same `person`. CRITICAL: put the "
+        "COMPLETE story in `text` — every sentence, NEVER summarize. Also pass `tone_note` "
+        "(how they told it: warm, laughing, quiet, sad…). Server keeps listen-session speech too. "
+        "Never include a passphrase in the text."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
-            "person": {"type": "string", "description": "Whose memory this is (their name)"},
+            "person": {
+                "type": "string",
+                "description": "Whose memory this is — the name you asked before the story",
+            },
             "kind": {"type": "string",
                      "enum": ["story", "recipe", "skill", "tradition", "advice", "family history", "other"]},
             "title": {"type": "string", "description": "Short title, e.g. 'Nonna's polenta' or 'The winter of 1956'"},
@@ -46,6 +49,13 @@ class SaveMemory(Tool):
                     "FULL verbatim story in their words — not a summary. Include every detail they said."
                 ),
             },
+            "tone_note": {
+                "type": "string",
+                "description": (
+                    "Short cue for how they told it (e.g. 'warm, laughing' or 'quiet, nostalgic'). "
+                    "Used only when speaking it back word for word."
+                ),
+            },
             "passphrase": {"type": "string", "description": "Their passphrase as they just said it (only needed if the voice guard is off)"},
         },
         "required": ["person", "kind", "title", "text"],
@@ -53,7 +63,11 @@ class SaveMemory(Tool):
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         del deps
-        body = {k: kwargs.get(k) for k in ("person", "kind", "title", "text", "passphrase") if kwargs.get(k)}
+        body = {
+            k: kwargs.get(k)
+            for k in ("person", "kind", "title", "text", "tone_note", "passphrase")
+            if kwargs.get(k)
+        }
         payload = _api_request("POST", "/memories/save", body)
         logger.info("save_memory → %s", payload)
         return payload

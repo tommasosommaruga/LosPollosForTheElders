@@ -28,8 +28,8 @@ class RecallPersonMemories(Tool):
         "Find what a family member saved: stories, recipes, skills, traditions, advice, family history. "
         "Use when someone asks about another person by name, e.g. 'tell me a story grandpa Mario told you' "
         "or 'what was Nonna Rosa's polenta recipe'. Pass the person's name, optionally a kind and topic "
-        "words. Then speak the COMPLETE memory from the returned `text` field as one engaging story — "
-        "every detail, warm and vivid. NEVER summarize. NEVER invent details that are not in `text`."
+        "words. Then speak the returned `text` WORD FOR WORD — exactly, verbatim; do not rephrase. "
+        "Use `tone_note` only for delivery. NEVER summarize. NEVER invent words not in `text`."
     )
     parameters_schema = {
         "type": "object",

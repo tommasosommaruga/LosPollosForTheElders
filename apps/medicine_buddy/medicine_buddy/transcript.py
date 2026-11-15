@@ -63,6 +63,12 @@ class TranscriptMixin:
             todo = [ln for ln in reversed(self._tlines) if not ln["checked"]][:budget]
         if not todo:
             return
+        # Demo mode: no spoken-passphrase gating — skip PBKDF2 so Live talk stays snappy.
+        if hasattr(self, "require_passphrases") and not self.require_passphrases():
+            with self._tlock:
+                for ln in todo:
+                    ln["checked"] = True
+            return
         people = self.db.list_people()
         for ln in todo:
             hit = any(secret_in_text(p.secret, ln["text"]) for p in people)
@@ -90,21 +96,32 @@ class TranscriptMixin:
     def recent_user_story_text(
         self,
         *,
-        max_chars: int = 6000,
-        max_age_s: float = 900.0,
-        max_lines: int = 40,
+        max_chars: int = 8000,
+        max_age_s: float = 1800.0,
+        max_lines: int = 80,
     ) -> str:
         """Join recent person utterances into one story body (for faithful memory saves).
 
-        Skips tiny confirmations like "yes" / "save it". Strips a trailing
-        "finish… save it" meta-instruction when present. Empty if nothing useful.
+        During an active story listen session, only lines after session start are
+        kept (and the window is longer). Skips tiny confirmations like "yes" /
+        "save it". Strips a trailing "finish… save it" meta-instruction.
         """
         now = time.time()
+        session_start = None
+        if hasattr(self, "story_session_started_at"):
+            session_start = self.story_session_started_at()
+        if session_start is not None:
+            # Active story: keep everything since they started telling it.
+            max_age_s = max(max_age_s, 1800.0)
+            max_lines = max(max_lines, 100)
         with self._tlock:
             lines = [
                 ln for ln in self._tlines
                 if ln["who"] == "person" and now - ln["at"] <= max_age_s
             ]
+        if session_start is not None:
+            # Only what they said after listen_patiently(start) — not earlier small talk.
+            lines = [ln for ln in lines if ln["at"] >= float(session_start)]
         chunks: list[str] = []
         for ln in lines[-max_lines:]:
             text = (ln.get("text") or "").strip()

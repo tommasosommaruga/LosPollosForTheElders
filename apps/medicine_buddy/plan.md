@@ -4,6 +4,12 @@
 
 First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm gate, OCR confidence gate, place verify, adherence voice fallback. Hardware Reachy/Maker Arm wired behind ports later.
 
+## v0.10.15 — fast verbatim memories + tone_note (done)
+
+- Skip PBKDF2 passphrase-in-story scans when passphrases are OFF (fixed robot `save_memory` timeouts)
+- Budgeted scan when ON; Live-talk scrubbing skips hashing in demo mode
+- Optional `tone_note` on memories; recall speaks text WORD FOR WORD; save feedback in speak_hint / profile
+
 ## Approach
 
 - Explicit `DoseStateMachine` + port interfaces

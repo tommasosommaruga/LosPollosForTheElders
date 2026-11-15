@@ -14,12 +14,16 @@ import hashlib
 import hmac
 import os
 import re
+import time
 from dataclasses import dataclass
 
 ITERATIONS = 20_000  # each spoken n-gram is hashed when checking speech, so keep this moderate
 MIN_WORDS = 2
 MIN_LETTERS = 10
 MAX_WORDS = 8
+# Long stories × many people × PBKDF2 must not stall voice tools (robot ~25s HTTP timeout).
+DEFAULT_SCAN_MAX_WINDOWS = 400
+DEFAULT_SCAN_BUDGET_S = 3.0
 
 
 def normalize_phrase(text: str) -> str:
@@ -101,5 +105,70 @@ def phrase_occurrences(phrase: str, text: str) -> int:
     return count
 
 
-def secret_in_text(secret: StoredSecret, text: str) -> bool:
-    return any(secret.matches(w) for w in word_windows(text, secret.words))
+@dataclass(frozen=True)
+class SecretScanResult:
+    found: bool
+    completed: bool  # False if a time/window budget stopped the scan early
+
+
+def secret_in_text(
+    secret: StoredSecret,
+    text: str,
+    *,
+    max_windows: int | None = None,
+    deadline: float | None = None,
+) -> bool:
+    """True if a salted passphrase hash matches any contiguous word window in ``text``.
+
+    Optional ``max_windows`` / ``deadline`` stop early (returns False without a match).
+    Default is a full scan — callers that must stay fast should pass budgets.
+    """
+    return scan_secret_in_text(
+        secret, text, max_windows=max_windows, deadline=deadline
+    ).found
+
+
+def scan_secret_in_text(
+    secret: StoredSecret,
+    text: str,
+    *,
+    max_windows: int | None = None,
+    deadline: float | None = None,
+) -> SecretScanResult:
+    windows = word_windows(text, secret.words)
+    limited = max_windows is not None and len(windows) > max(0, int(max_windows))
+    if limited:
+        windows = windows[: max(0, int(max_windows))]
+    for window in windows:
+        if deadline is not None and time.monotonic() > deadline:
+            return SecretScanResult(found=False, completed=False)
+        if secret.matches(window):
+            return SecretScanResult(found=True, completed=True)
+    return SecretScanResult(found=False, completed=not limited)
+
+
+def scan_any_secret_in_text(
+    secrets: list[StoredSecret],
+    text: str,
+    *,
+    max_windows_per_secret: int = DEFAULT_SCAN_MAX_WINDOWS,
+    budget_s: float = DEFAULT_SCAN_BUDGET_S,
+) -> SecretScanResult:
+    """Scan all secrets; ``completed=False`` if the time/window budget ran out."""
+    if not secrets or not (text or "").strip():
+        return SecretScanResult(found=False, completed=True)
+    deadline = time.monotonic() + max(0.05, float(budget_s))
+    for secret in secrets:
+        if time.monotonic() > deadline:
+            return SecretScanResult(found=False, completed=False)
+        part = scan_secret_in_text(
+            secret,
+            text,
+            max_windows=max_windows_per_secret,
+            deadline=deadline,
+        )
+        if part.found:
+            return SecretScanResult(found=True, completed=True)
+        if not part.completed:
+            return SecretScanResult(found=False, completed=False)
+    return SecretScanResult(found=False, completed=True)

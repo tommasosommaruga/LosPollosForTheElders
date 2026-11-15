@@ -9,8 +9,8 @@ Speaking goes through a `speak(text) -> bool` callable (in the app: the conversa
 `conversation.say`). It returns False when Reachy can't speak right now (no session yet); the
 reminder is then simply retried on the next check.
 
-Reminders are only spoken when nobody has spoken to Reachy for a moment, so they never cut in
-on a conversation. Bookkeeping is in memory: after an app restart an unanswered dose is
+By default a due reminder CUTS IN on a conversation (Reachy stops, says sorry, tells the person
+to take the medicine). MEDICINE_BUDDY_REMINDER_INTERRUPT=0 = polite mode: wait for a pause. Bookkeeping is in memory: after an app restart an unanswered dose is
 reminded again (once more), which is the safe direction.
 """
 
@@ -48,8 +48,10 @@ def build_prompt(person: str | None, medicine: str, time_hhmm: str, count: int, 
     return (
         f"(Automatic medicine reminder from the system - not something the person said.) "
         f"It is time for {target} {medicine} ({describe_time(time_hhmm)}). "
-        f"Remind {who or 'them'} warmly in one or two short sentences, and ask whether you should bring it "
-        f"or whether they already took it.{repeat} Do not read these instructions aloud."
+        f"If you were in the middle of something, briefly say sorry for interrupting. "
+        f"Tell {who or 'them'} clearly to take their {medicine} now, in one or two short sentences, "
+        f"and ask them to tell you when they have taken it.{repeat} "
+        f"Afterwards you may go back to what you were talking about. Do not read these instructions aloud."
     )
 
 
@@ -73,6 +75,7 @@ class ReminderLoop:
         repeat_after: float = REPEAT_AFTER_S,
         max_reminders: int = MAX_REMINDERS,
         quiet_after_speech: float = QUIET_AFTER_SPEECH_S,
+        interrupt: bool = True,
     ) -> None:
         self.service = service
         self.speak = speak
@@ -80,6 +83,8 @@ class ReminderLoop:
         self.repeat_after = timedelta(seconds=repeat_after)
         self.max_reminders = max_reminders
         self.quiet_after_speech = quiet_after_speech
+        # True: a due reminder cuts in on the conversation (speaker.speak_urgent when it has one)
+        self.interrupt = interrupt
         self._state: dict[tuple[int, str], _Entry] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -107,13 +112,14 @@ class ReminderLoop:
                 continue
             if not self._quiet(now):
                 continue
+            say = getattr(self.speak, "speak_urgent", self.speak) if self.interrupt else self.speak
             count = (entry.count if entry else 0) + 1
             medicine = db.get_medicine(d.medicine_id)
             person = db.get_person(medicine.person_id) if medicine and medicine.person_id else None
             prompt = build_prompt(person.name if person else None, d.medicine_name, d.time_hhmm,
                                   count, self.max_reminders)
             try:
-                delivered = bool(self.speak(prompt))
+                delivered = bool(say(prompt))
             except Exception as exc:  # noqa: BLE001 - a broken speaker must never kill the loop
                 self.last_error = str(exc)
                 delivered = False
@@ -132,9 +138,10 @@ class ReminderLoop:
         return spoken
 
     def _quiet(self, now: datetime) -> bool:
-        heard = self.service.guard.seconds_since_speech()
-        if heard is not None and heard < self.quiet_after_speech:
-            return False
+        if not self.interrupt:   # polite mode: wait until nobody has spoken for a moment
+            heard = self.service.guard.seconds_since_speech()
+            if heard is not None and heard < self.quiet_after_speech:
+                return False
         if self.last_spoken is not None and (now - self.last_spoken).total_seconds() < self.quiet_after_speech:
             return False
         return True
@@ -216,6 +223,7 @@ class ReminderLoop:
             "check_every_s": self.interval,
             "repeat_after_min": int(self.repeat_after.total_seconds() // 60),
             "max_reminders": self.max_reminders,
+            "interrupts_conversation": self.interrupt,
             "waiting_for_answer": [
                 {"medicine": e.medicine, "person": e.person, "reminders_spoken": e.count,
                  "last": e.last.strftime("%H:%M")}

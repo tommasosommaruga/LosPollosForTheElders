@@ -481,6 +481,96 @@ def test_unified_list_skips_legacy_non_mirror_medicine(
     assert med_rows[0]["time_hhmm"] == "09:00"
 
 
+def test_google_pull_merges_into_local_by_external_id(
+    service: MedicineBuddyService,
+) -> None:
+    """Pulled gcal-* uid must update the local row that already has that Google id."""
+    from medicine_buddy.calendar_ics import ParsedEvent
+
+    local = service.db.upsert_calendar_event(
+        uid="local-walk@medicine-buddy",
+        kind="companion",
+        title="Garden walk",
+        time_hhmm="10:00",
+        weekdays="*",
+        source="local",
+        external_id="abc123",
+    )
+    result = service._apply_parsed_calendar_items(
+        [
+            ParsedEvent(
+                uid="gcal-abc123@google",
+                summary="Garden walk (updated)",
+                description="from google",
+                time_hhmm="11:00",
+                weekdays="*",
+                starts_at=None,
+                all_day=False,
+                medicine_hint=None,
+            )
+        ],
+        source="google",
+    )
+    assert result["companion_upserted"] == 1
+    active = service.db.list_calendar_events(status="active", kind="companion")
+    assert len(active) == 1
+    assert active[0].id == local.id
+    assert active[0].uid == "local-walk@medicine-buddy"
+    assert active[0].external_id == "abc123"
+    assert active[0].title == "Garden walk (updated)"
+    assert active[0].time_hhmm == "11:00"
+
+
+def test_dedupe_cancels_orphan_gcal_twin(service: MedicineBuddyService) -> None:
+    """Existing local+gcal twins for the same Google id → cancel the gcal-* copy."""
+    local = service.db.upsert_calendar_event(
+        uid="local-physio@medicine-buddy",
+        kind="companion",
+        title="Physio",
+        time_hhmm="14:00",
+        weekdays="1,3",
+        source="local",
+        external_id="g1",
+    )
+    twin = service.db.upsert_calendar_event(
+        uid="gcal-g1@google",
+        kind="companion",
+        title="Physio",
+        time_hhmm="14:00",
+        weekdays="1,3",
+        source="google",
+        external_id="g1",
+    )
+    cancelled = service.dedupe_google_calendar_twins()
+    assert cancelled == 1
+    assert service.db.get_calendar_event(local.id).status == "active"
+    assert service.db.get_calendar_event(twin.id).status == "cancelled"
+    assert len(service.db.list_calendar_events(status="active", kind="companion")) == 1
+
+
+def test_admin_delete_calendar_and_dose_rows(service: MedicineBuddyService) -> None:
+    from medicine_buddy.states import DoseState
+
+    ev = service.db.upsert_calendar_event(
+        uid="del-me@medicine-buddy",
+        kind="companion",
+        title="Temp",
+        time_hhmm="09:00",
+        weekdays="*",
+    )
+    med = service.db.add_medicine("Aspirin")
+    dose = service.db.record_transition(med.id, DoseState.DUE, detail="test")
+    snap = service.database_snapshot()
+    names = {t["name"] for t in snap["tables"]}
+    assert "calendar_events" in names
+    assert service.admin_delete_row("calendar_events", ev.id)["status"] == "ok"
+    assert service.db.get_calendar_event(ev.id) is None
+    assert service.admin_delete_row("dose_events", dose.id)["status"] == "ok"
+    assert service.db.list_dose_events(medicine_id=med.id) == []
+    bad = service.admin_delete_row("people", 1)
+    assert "error" in bad
+
+
 def _one(dtstart_line: str) -> str:
     return f"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:x\r\nSUMMARY:Visit\r\n{dtstart_line}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
 

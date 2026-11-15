@@ -601,6 +601,14 @@ class Database:
             assert updated is not None
             return updated
 
+    def delete_medicine_cascade(self, medicine_id: int) -> bool:
+        """Remove medicine, its schedules, and dose history. Returns False if missing."""
+        if self.get_medicine(medicine_id) is None:
+            return False
+        self._write("DELETE FROM dose_events WHERE medicine_id = ?", (medicine_id,))
+        self._write("DELETE FROM schedules WHERE medicine_id = ?", (medicine_id,))
+        return self._write("DELETE FROM medicines WHERE id = ?", (medicine_id,)).rowcount == 1
+
     def deactivate_schedule(self, schedule_id: int) -> bool:
         """Soft delete: keeps the row (and dose history) but stops reminders. True if changed."""
         cur = self._write(
@@ -709,6 +717,30 @@ class Database:
     def get_calendar_event_by_uid(self, uid: str) -> CalendarEvent | None:
         row = self._one(f"SELECT {self._CAL_COLS} FROM calendar_events WHERE uid = ?", (uid,))
         return None if row is None else self._calendar_event(row)
+
+    def get_calendar_event_by_external_id(self, external_id: str) -> CalendarEvent | None:
+        """Find a row linked to a Google event id. Prefer a non-gcal-* local uid."""
+        ext = (external_id or "").strip()
+        if not ext:
+            return None
+        rows = self._all(
+            f"SELECT {self._CAL_COLS} FROM calendar_events WHERE external_id = ? ORDER BY id",
+            (ext,),
+        )
+        if not rows:
+            return None
+        events = [self._calendar_event(r) for r in rows]
+        preferred = [
+            e for e in events
+            if not (e.uid.startswith("gcal-") and e.uid.endswith("@google"))
+        ]
+        return preferred[0] if preferred else events[0]
+
+    def delete_calendar_event(self, event_id: int) -> bool:
+        return self._write("DELETE FROM calendar_events WHERE id = ?", (event_id,)).rowcount == 1
+
+    def delete_dose_event(self, event_id: int) -> bool:
+        return self._write("DELETE FROM dose_events WHERE id = ?", (event_id,)).rowcount == 1
 
     def list_calendar_events(
         self,

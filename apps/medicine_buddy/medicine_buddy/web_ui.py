@@ -365,13 +365,41 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         s = session_for(request)
         if s is None:
             return RedirectResponse(PREFIX, status_code=303)
-        return html(_database_page(_nav("data", s["who"])))
+        return html(_database_page(s["csrf"], _nav("data", s["who"])))
 
     @app.get(f"{PREFIX}/data/tables")
     def database_data(request: Request):
         if session_for(request) is None:
             return JSONResponse({"error": "please sign in again"}, 401)
         return JSONResponse(service.database_snapshot(), headers=headers())
+
+    @app.post(f"{PREFIX}/data/delete")
+    async def database_delete(request: Request):
+        start = time.perf_counter()
+        _, denied = need_change_rights(request)
+        if denied is not None:
+            return denied
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "JSON expected"}, 400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON object expected"}, 400)
+        table = str(body.get("table") or "")
+        raw_id = body.get("id")
+        key = body.get("key")
+        row_id: int | None = None
+        if raw_id is not None and str(raw_id).strip() != "":
+            try:
+                row_id = int(raw_id)
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "id must be a number"}, 400)
+        payload = service.admin_delete_row(
+            table, row_id, key=str(key) if key is not None else None
+        )
+        status = 400 if "error" in payload else 200
+        track(request, status, start, payload)
+        return JSONResponse(payload, status)
     # ------------------------------------------------------------------ history / explorer
     @app.get(f"{PREFIX}/history")
     def history_page(request: Request):
@@ -605,24 +633,31 @@ poll(); setInterval(poll, 2000);
 </script></main></body></html>"""
 
 
-def _database_page(nav: str) -> str:
+def _database_page(csrf: str, nav: str) -> str:
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>Medicine Buddy - database</title>
 <style>{_BASE_CSS}
 .tabs button{{margin:0 6px 6px 0}} .tabs button.on{{background:var(--accent);color:#fff;border-color:var(--accent)}}
 td{{white-space:pre-wrap;word-break:break-word}}
+td.act{{white-space:nowrap}}
+button.danger{{background:#fff;color:#a11;border:1px solid #c66}}
+button.danger:hover{{background:#fee}}
+#msg{{min-height:1.2em}}
 </style></head><body><main>
 {nav}
 <h1>Database</h1>
-<p class=muted>Read-only view of everything stored on this machine. Changes are made by voice or on the Family page.
-Passphrases are stored only as salted hashes and are never shown.</p>
+<p class=muted>View and delete rows stored on this machine. Passphrases are salted hashes and never shown.
+People are managed on the Family page. Deleting a calendar row clears sync duplicates; schedules are
+deactivated (not hard-wiped) so dose history stays coherent.</p>
+<p class=muted id=msg></p>
 <section><div class=kv id=info></div></section>
 <section><div class=tabs id=tabs></div><p class=muted id=note></p>
 <table><thead id=head></thead><tbody id=body></tbody></table></section>
 <script>
+const TOKEN = {json.dumps(csrf)};
 const P = {json.dumps(PREFIX)};
 {_COMMON_JS}
-let data = null, cur = "medicines";
+let data = null, cur = "calendar_events";
 try {{ cur = localStorage.getItem("mb_table") || cur; }} catch (e) {{}}
 function show() {{
   const t = data.tables.find(x => x.name === cur) || data.tables[0]; cur = t.name;
@@ -630,10 +665,40 @@ function show() {{
     b.textContent = x.name + " (" + x.rows.length + ")"; if (x.name === cur) b.className = "on";
     b.onclick = () => {{ cur = x.name; try {{ localStorage.setItem("mb_table", cur); }} catch (e) {{}} show(); }}; return b; }}));
   $("note").textContent = t.note || "";
-  const hr = document.createElement("tr"); t.columns.forEach(c => {{ const h = document.createElement("th"); h.textContent = c; hr.append(h); }});
+  const cols = t.columns.slice();
+  if (t.deletable) cols.push("");
+  const hr = document.createElement("tr"); cols.forEach(c => {{ const h = document.createElement("th"); h.textContent = c; hr.append(h); }});
   $("head").replaceChildren(hr);
-  if (!t.rows.length) {{ const tr = document.createElement("tr"); const c = td("Empty.", "muted"); c.colSpan = t.columns.length; tr.append(c); $("body").replaceChildren(tr); return; }}
-  $("body").replaceChildren(...t.rows.map(r => {{ const tr = document.createElement("tr"); r.forEach(v => tr.append(td(v))); return tr; }}));
+  if (!t.rows.length) {{ const tr = document.createElement("tr"); const c = td("Empty.", "muted"); c.colSpan = cols.length; tr.append(c); $("body").replaceChildren(tr); return; }}
+  $("body").replaceChildren(...t.rows.map(r => {{
+    const tr = document.createElement("tr");
+    r.forEach(v => tr.append(td(v)));
+    if (t.deletable) {{
+      const cell = document.createElement("td"); cell.className = "act";
+      const btn = document.createElement("button"); btn.type = "button"; btn.className = "danger";
+      btn.textContent = "Delete";
+      btn.onclick = () => delRow(t, r);
+      cell.append(btn); tr.append(cell);
+    }}
+    return tr;
+  }}));
+}}
+async function delRow(t, row) {{
+  const label = row.slice(0, 3).map(String).join(" · ");
+  if (!confirm("Delete this " + t.name + " row?\\n" + label)) return;
+  const body = {{ table: t.name }};
+  if (t.id_column === "key") body.key = row[0];
+  else body.id = row[0];
+  $("msg").textContent = "Deleting…";
+  const res = await fetch(P + "/data/delete", {{
+    method: "POST",
+    headers: {{ "Content-Type": "application/json", "X-Family-Token": TOKEN }},
+    body: JSON.stringify(body),
+  }});
+  const payload = await res.json().catch(() => ({{}}));
+  if (!res.ok) {{ $("msg").textContent = payload.error || ("Delete failed (" + res.status + ")"); return; }}
+  $("msg").textContent = "Deleted.";
+  await load();
 }}
 async function load() {{
   const r = await fetch(P + "/data/tables", {{cache: "no-store"}});

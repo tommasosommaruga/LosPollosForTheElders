@@ -48,6 +48,15 @@ EXPORT_TOKEN_KEY = "calendar_export_token"
 IMPORT_URL_KEY = "calendar_import_url"
 LAST_SYNC_KEY = "calendar_last_sync"
 LAST_SYNC_ERROR_KEY = "calendar_last_sync_error"
+
+
+def google_id_from_uid(uid: str) -> str | None:
+    """Extract Google event id from pull uid ``gcal-{id}@google``."""
+    text = (uid or "").strip()
+    if text.startswith("gcal-") and text.endswith("@google"):
+        gid = text[len("gcal-") : -len("@google")]
+        return gid or None
+    return None
 SYNC_INTERVAL_S = 15 * 60
 FETCH_TIMEOUT_S = 12
 FETCH_MAX_BYTES = 1_500_000
@@ -430,12 +439,52 @@ class CalendarMixin:
             )
         return pulled
 
+    def _uid_and_external_for_import(self, item: ParsedEvent) -> tuple[str, str | None]:
+        """Map a pulled item onto an existing local row when Google id already linked."""
+        gid = google_id_from_uid(item.uid)
+        if gid:
+            existing = self.db.get_calendar_event_by_external_id(gid)
+            if existing is not None:
+                return existing.uid, gid
+            return item.uid, gid
+        return item.uid, None
+
+    def dedupe_google_calendar_twins(self) -> int:
+        """Cancel orphan ``gcal-*`` rows that duplicate a local row with the same Google id."""
+        cancelled = 0
+        keeper_by_gid: dict[str, int] = {}
+        for ev in self.db.list_calendar_events(status="active", limit=500):
+            gid = (ev.external_id or "").strip() or google_id_from_uid(ev.uid) or ""
+            if not gid:
+                continue
+            is_gcal = google_id_from_uid(ev.uid) is not None
+            if not ev.external_id and is_gcal:
+                self.db.set_calendar_external_id(ev.id, gid)
+            keeper_id = keeper_by_gid.get(gid)
+            if keeper_id is None:
+                keeper_by_gid[gid] = ev.id
+                continue
+            keeper = self.db.get_calendar_event(keeper_id)
+            keeper_is_gcal = bool(keeper and google_id_from_uid(keeper.uid))
+            # Prefer keeping the non-gcal (local / mb-med-*) row.
+            if keeper_is_gcal and not is_gcal:
+                self.db.set_calendar_event_status(keeper_id, "cancelled")
+                cancelled += 1
+                keeper_by_gid[gid] = ev.id
+                if not ev.external_id:
+                    self.db.set_calendar_external_id(ev.id, gid)
+            else:
+                self.db.set_calendar_event_status(ev.id, "cancelled")
+                cancelled += 1
+        return cancelled
+
     def _apply_parsed_calendar_items(
         self, parsed: list[ParsedEvent], *, source: str
     ) -> dict[str, Any]:
         companion_n = proposal_n = updated_n = skipped = 0
         seen_companion_uids: set[str] = set()
         for item in parsed:
+            uid, external_id = self._uid_and_external_for_import(item)
             if item.medicine_hint or self._looks_like_medicine(item.summary):
                 hint = item.medicine_hint or item.summary
                 match = self.catalog.match(hint)
@@ -443,7 +492,7 @@ class CalendarMixin:
                     skipped += 1
                     continue
                 weekdays = item.weekdays or "*"
-                existing = self.db.get_calendar_event_by_uid(item.uid)
+                existing = self.db.get_calendar_event_by_uid(uid)
                 if existing and existing.status == "rejected":
                     skipped += 1
                     continue
@@ -453,7 +502,7 @@ class CalendarMixin:
                     weekdays=weekdays,
                     time_hhmm=item.time_hhmm,
                     person_id=person_id,
-                    uid=item.uid,
+                    uid=uid,
                 )
                 if sync_result == "updated":
                     updated_n += 1
@@ -461,7 +510,7 @@ class CalendarMixin:
                 if sync_result == "matched":
                     continue
                 self.db.upsert_calendar_event(
-                    uid=item.uid,
+                    uid=uid,
                     kind="medicine",
                     title=medicine_summary(match.name),
                     description=item.description,
@@ -473,15 +522,23 @@ class CalendarMixin:
                     medicine_name=match.name,
                     source=source,
                     status="proposed",
+                    external_id=external_id,
                 )
                 proposal_n += 1
                 continue
             if not item.summary:
                 skipped += 1
                 continue
-            seen_companion_uids.add(item.uid)
+            seen_companion_uids.add(uid)
+            # Keep source=local when updating a voice-created row that already has this Google id.
+            existing_companion = self.db.get_calendar_event_by_uid(uid)
+            write_source = (
+                "local"
+                if existing_companion is not None and existing_companion.source == "local"
+                else source
+            )
             self.db.upsert_calendar_event(
-                uid=item.uid,
+                uid=uid,
                 kind="companion",
                 title=item.summary,
                 description=item.description,
@@ -489,13 +546,16 @@ class CalendarMixin:
                 time_hhmm=item.time_hhmm or "",
                 starts_at=item.starts_at or "",
                 all_day=item.all_day,
-                source=source,
+                source=write_source,
                 status="active",
+                external_id=external_id,
             )
             companion_n += 1
         cancelled_n = self._cancel_missing_import_companions(
             seen_companion_uids, sources={source}
         )
+        twins_n = self.dedupe_google_calendar_twins() if source == "google" else 0
+        cancelled_n += twins_n
         now = datetime.now().astimezone().replace(microsecond=0).isoformat()
         self.db.set_setting(LAST_SYNC_KEY, now)
         self.db.set_setting(LAST_SYNC_ERROR_KEY, "")

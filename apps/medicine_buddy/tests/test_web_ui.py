@@ -194,11 +194,40 @@ def test_database_page_read_only_no_secrets(svc, client: TestClient) -> None:
     d = client.get("/medicine/data/tables").json()
     assert client.get("/medicine/data/tables").status_code == 200
     names = {t["name"] for t in d["tables"]}
-    assert {"people", "medicines", "schedules", "dose_events", "memories", "app_settings"} <= names
+    assert {
+        "people", "medicines", "schedules", "dose_events", "memories",
+        "app_settings", "calendar_events",
+    } <= names
     blob = json.dumps(d).lower()
     assert "pass_hash" not in blob and "pass_salt" not in blob and CARE not in blob and MARIO not in blob
     sched = next(t for t in d["tables"] if t["name"] == "schedules")["rows"]
     assert any(r[1] == "Mario" and r[2] == "Aspirin" for r in sched)
+
+
+def test_database_page_can_delete_calendar_row(svc, client: TestClient) -> None:
+    _family(svc)
+    ev = svc.db.upsert_calendar_event(
+        uid="ui-del@medicine-buddy",
+        kind="companion",
+        title="Delete me",
+        time_hhmm="12:00",
+        weekdays="*",
+    )
+    page = client.get("/medicine/data")
+    assert "Delete" in page.text
+    tok = _token(client, "/medicine/data")
+    assert client.post(
+        "/medicine/data/delete",
+        json={"table": "calendar_events", "id": ev.id},
+    ).status_code == 403
+    ok = client.post(
+        "/medicine/data/delete",
+        json={"table": "calendar_events", "id": ev.id},
+        headers={"X-Family-Token": tok},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["status"] == "ok"
+    assert svc.db.get_calendar_event(ev.id) is None
 
 
 def test_nav_dashboard_link_on_conversation_and_pollen_home(svc, client: TestClient) -> None:

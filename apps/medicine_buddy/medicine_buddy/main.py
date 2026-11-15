@@ -72,8 +72,10 @@ from reachy_mini_conversation_app import main as conversation  # noqa: E402
 from reachy_mini_conversation_app.conversation_handler import ConversationHandler  # noqa: E402
 
 from medicine_buddy.api import MedicineBuddyService, start_server  # noqa: E402
+from medicine_buddy.calendar_service import CalendarSyncLoop  # noqa: E402
 from medicine_buddy.config import AppConfig  # noqa: E402
 from medicine_buddy.db import default_db_path  # noqa: E402
+from medicine_buddy.checkins import CheckInLoop  # noqa: E402
 from medicine_buddy.reminders import ReminderLoop  # noqa: E402
 from medicine_buddy.speaker import RpcSpeaker  # noqa: E402
 from medicine_buddy.wake import start_wake_greeting  # noqa: E402
@@ -142,7 +144,13 @@ class MedicineBuddy(ReachyMiniApp):
         # audio update can mute TTS while transcripts still appear. listen_patiently
         # stays a behavioral flag for the profile until we have a safe full-session apply.
         reminders = None
+        checkins = None
+        calendar_sync = None
         speaker = None
+        if os.environ.get("MEDICINE_BUDDY_CALENDAR_SYNC", "1").lower() not in {"0", "false", "no", "off"}:
+            calendar_sync = CalendarSyncLoop(service)
+            service.calendar_sync_loop = calendar_sync
+            calendar_sync.start()
         if os.environ.get("MEDICINE_BUDDY_REMINDERS", "1").lower() not in {"0", "false", "no", "off"}:
             ui_port = urlparse(self.custom_app_url).port or 7860
             speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")   # waits until Reachy is idle
@@ -150,6 +158,14 @@ class MedicineBuddy(ReachyMiniApp):
             reminders = ReminderLoop(service, speaker)
             service.reminder_loop = reminders   # shown on the debug page
             reminders.start()
+        if os.environ.get("MEDICINE_BUDDY_CHECKINS", "1").lower() not in {"0", "false", "no", "off"}:
+            if speaker is None:
+                ui_port = urlparse(self.custom_app_url).port or 7860
+                speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")
+                speaker.start()
+            checkins = CheckInLoop(service, speaker)
+            service.checkin_loop = checkins
+            checkins.start()
         # Wake line + "what's due in the next 30 min" once speech is ready (same speaker as reminders).
         wake_on = os.environ.get("MEDICINE_BUDDY_WAKE_GREETING", "1").lower() not in {
             "0", "false", "no", "off",
@@ -170,6 +186,10 @@ class MedicineBuddy(ReachyMiniApp):
             self._run_conversation(reachy_mini, stop_event)
         finally:
             _SERVICE = None
+            if calendar_sync is not None:
+                calendar_sync.stop()
+            if checkins is not None:
+                checkins.stop()
             if reminders is not None:
                 reminders.stop()
             if speaker is not None:

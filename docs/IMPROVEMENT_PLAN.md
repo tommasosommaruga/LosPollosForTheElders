@@ -38,7 +38,7 @@ Status: all five are fixed. #1 proactive reminders (`reminders.py`, `speaker.py`
 
 | # | Item | Notes |
 |---|---|---|
-| 12 | **Caregiver alerts**: missed dose / repeated refusal -> push notification (Telegram/ntfy/email) | Needs 1 first. Config in `.env`, test button on the Family page. |
+| 12 | **Caregiver alerts**: missed dose / repeated refusal -> push notification (Telegram/ntfy/email) | **Done (v0.7):** ntfy/webhook via `MEDICINE_BUDDY_ALERT_URL` + Family page test button. SMS/email still later. |
 | 13 | **Multilingual**: family speaks English, Italian and French (seen in the logs); catalog aliases, weekday words ("lunedi", "lundi") and yes/no detection are English only | Localised alias lists; language per person. |
 | 14 | **Physical confirmation** for risky actions (dispense, delete): antenna touch/press instead of "anyone in the room can say yes" | Pollen's "antenna as button" pattern. Voice identification is a research topic, not a quick fix. |
 | 15 | Catalog is fixed at 10 medicines | Caregiver adds/edits medicines on the Family page (still no free text for the voice). |

@@ -82,6 +82,17 @@ def deliver_wake_greeting(
     upcoming = find_upcoming_doses(service.db, now, within=within, tz=service.tz())
     window_minutes = max(1, int(within.total_seconds() // 60))
     prompt = build_wake_prompt(upcoming, window_minutes=window_minutes)
+    # Optional companion calendar note (never invents medicines).
+    try:
+        companion = service._upcoming_companion_summaries(limit=3)
+    except Exception:  # noqa: BLE001
+        companion = []
+    if companion:
+        prompt += (
+            " Also mention briefly these companion calendar items if they fit: "
+            + "; ".join(companion)
+            + ". Do not invent extra calendar items."
+        )
     logger.info(
         "Wake greeting ready (%d upcoming in next %d min); waiting for Reachy to speak",
         len(upcoming), window_minutes,

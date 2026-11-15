@@ -209,6 +209,16 @@ Pick a few that fit one table + chair setup.
 
 ## Suggested first build order
 
+### Software (this repo — already prioritized by impact)
+
+1. Medicine schedule + Missed **caregiver alerts** (chronic-care continuity)  
+2. **Adaptive** “encourage self-care first” before arm assist  
+3. Companion **check-ins** + family memories + **video-call URL** bridge  
+4. Soft **activity prompts** (voice only — not clinical therapy)  
+5. Then hand off to arm hardware for physical assist  
+
+### Arm team (hardware demos)
+
 1. Fixed table workspace + emergency stop  
 2. Object whitelist (3–5 items) + “bring X”  
 3. Floor pickup of one soft object  

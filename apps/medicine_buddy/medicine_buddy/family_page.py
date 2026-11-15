@@ -100,6 +100,85 @@ fingerprint. This page works only on this computer.
   <div class="msg" id="tz-msg"></div>
 </section>
 
+<section class="panel" id="alertpanel">
+  <h2>Caregiver alerts</h2>
+  <p class="hint" id="alert-status">Loading&hellip;</p>
+  <p class="hint">When a dose is marked Missed, Medicine Buddy can POST a short notice to an
+  <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> topic or any webhook URL.</p>
+  <div class="step" style="margin-top:10px"><label for="alert-url">Alert URL</label>
+    <div class="row"><input id="alert-url" autocomplete="off" placeholder="https://ntfy.sh/your-family-topic" style="flex:1;min-width:200px">
+    <button type="button" id="alert-save">Save</button></div></div>
+  <div class="row" style="margin-top:10px">
+    <button class="primary" type="button" id="alert-on">Enable alerts</button>
+    <button type="button" id="alert-off">Disable</button>
+    <button type="button" id="alert-test">Send test alert</button>
+  </div>
+  <div class="msg" id="alert-msg"></div>
+</section>
+
+<section class="panel" id="callpanel">
+  <h2>Family video call</h2>
+  <p class="hint" id="call-status">Loading&hellip;</p>
+  <p class="hint">Paste a Meet, FaceTime, WhatsApp or Zoom link. Reachy can offer to call family;
+  you open the link here on this computer (no video is embedded in the robot).</p>
+  <div class="step" style="margin-top:10px"><label for="call-label">Label</label>
+    <input id="call-label" autocomplete="off" placeholder="e.g. Call the children"></div>
+  <div class="step"><label for="call-url">Call link</label>
+    <div class="row"><input id="call-url" autocomplete="off" placeholder="https://meet.google.com/..." style="flex:1;min-width:200px">
+    <button type="button" id="call-save">Save</button>
+    <button class="primary" type="button" id="call-open">Open call</button></div></div>
+  <div class="msg" id="call-msg"></div>
+</section>
+
+<section class="panel" id="companionpanel">
+  <h2>Companion &amp; independence</h2>
+  <p class="hint">Reachy should help only where needed, and gently stimulate chat, memory and movement the rest of the time.</p>
+  <p class="hint" id="self-status">Loading&hellip;</p>
+  <div class="row" style="margin-top:8px">
+    <button class="primary" type="button" id="self-on">Encourage self-care first</button>
+    <button type="button" id="self-off">Offer arm help first</button>
+  </div>
+  <p class="hint" id="checkin-status" style="margin-top:14px">Loading&hellip;</p>
+  <div class="row" style="margin-top:8px">
+    <button class="primary" type="button" id="checkin-on">Enable check-ins</button>
+    <button type="button" id="checkin-off">Disable check-ins</button>
+  </div>
+  <div class="step" style="margin-top:10px"><label for="checkin-hours">Hours between check-ins</label>
+    <div class="row"><input id="checkin-hours" type="number" min="0.5" max="24" step="0.5" style="max-width:120px">
+    <button type="button" id="checkin-save">Save schedule</button></div></div>
+  <div class="row" style="margin-top:8px;gap:12px">
+    <div class="step" style="flex:1"><label for="quiet-start">Quiet from</label><input id="quiet-start" placeholder="21:00"></div>
+    <div class="step" style="flex:1"><label for="quiet-end">Quiet until</label><input id="quiet-end" placeholder="08:00"></div>
+  </div>
+  <p class="hint" id="nudge-status" style="margin-top:14px">Loading&hellip;</p>
+  <div class="row" style="margin-top:8px">
+    <button class="primary" type="button" id="nudge-on">Activity nudges on</button>
+    <button type="button" id="nudge-off">Activity nudges off</button>
+  </div>
+  <div class="msg" id="companion-msg"></div>
+</section>
+
+<section class="panel" id="calpanel">
+  <h2>Calendar</h2>
+  <p class="hint">Connect Outlook, Google or Apple with a subscribe link. Medicine Buddy stays the
+  source of truth for medicines; companion events (visits, appointments, notes) live here too.</p>
+  <p class="hint" id="cal-status">Loading&hellip;</p>
+  <div class="step" style="margin-top:10px"><label for="cal-export">Subscribe URL (export)</label>
+    <div class="row"><input id="cal-export" readonly autocomplete="off" style="flex:1;min-width:200px">
+    <button type="button" id="cal-copy">Copy</button>
+    <button type="button" id="cal-rotate">Rotate link</button></div>
+    <span class="hint">Paste this into Outlook / Google / Apple as a calendar subscription.</span></div>
+  <div class="step" style="margin-top:12px"><label for="cal-import">Import ICS URL</label>
+    <div class="row"><input id="cal-import" autocomplete="off" placeholder="https://…secret.ics" style="flex:1;min-width:200px">
+    <button type="button" id="cal-save-import">Save</button>
+    <button class="primary" type="button" id="cal-sync">Sync now</button></div>
+    <span class="hint">Use the calendar's secret / publish address. Medicine-like events become proposals below.</span></div>
+  <p class="hint" id="cal-sync-meta" style="margin-top:8px"></p>
+  <div id="cal-proposals" style="margin-top:12px"></div>
+  <div id="cal-upcoming" style="margin-top:10px"></div>
+  <div class="msg" id="cal-msg"></div>
+</section>
+
 <h2>People</h2>
 <div id="people" class="grid"><div class="meta">Loading&hellip;</div></div>
 
@@ -304,7 +383,206 @@ async function saveTz(zone) {
 $("tz-use-device").addEventListener("click", () => saveTz(deviceZone));
 $("tz-save").addEventListener("click", () => saveTz($("tz-input").value.trim()));
 
+function showAlerts(r) {
+  $("alert-status").textContent = r.message || "";
+  $("alert-url").value = r.url || "";
+  $("alert-on").disabled = !!r.enabled;
+  $("alert-off").disabled = !r.enabled;
+}
+
+async function loadAlerts() {
+  const r = await api("/settings/caregiver_alerts", {});
+  if (r.status === "ok") showAlerts(r);
+  else $("alert-status").textContent = r.error || "Could not read alert settings.";
+}
+
+async function saveAlerts(extra) {
+  clearMsg($("alert-msg"));
+  const body = Object.assign({url: $("alert-url").value.trim()}, extra || {});
+  const r = await api("/settings/caregiver_alerts", body);
+  if (r.status === "ok") { showAlerts(r); msg($("alert-msg"), r.message || "Saved.", true); }
+  else msg($("alert-msg"), r.error || "Could not save.", false);
+}
+
+$("alert-save").addEventListener("click", () => saveAlerts({}));
+$("alert-on").addEventListener("click", () => saveAlerts({enabled: true}));
+$("alert-off").addEventListener("click", () => saveAlerts({enabled: false}));
+$("alert-test").addEventListener("click", () => saveAlerts({test: true}));
+
+function showCall(r) {
+  $("call-status").textContent = r.message || "";
+  $("call-url").value = r.url || "";
+  $("call-label").value = r.label || "";
+  $("call-open").disabled = !r.url;
+}
+
+async function loadCall() {
+  const r = await api("/settings/family_call", {});
+  if (r.status === "ok") showCall(r);
+  else $("call-status").textContent = r.error || "Could not read call settings.";
+}
+
+async function saveCall() {
+  clearMsg($("call-msg"));
+  const r = await api("/settings/family_call", {url: $("call-url").value.trim(), label: $("call-label").value.trim()});
+  if (r.status === "ok") { showCall(r); msg($("call-msg"), r.message || "Saved.", true); }
+  else msg($("call-msg"), r.error || "Could not save.", false);
+}
+
+$("call-save").addEventListener("click", saveCall);
+$("call-open").addEventListener("click", () => {
+  const url = $("call-url").value.trim();
+  if (!url) { msg($("call-msg"), "Save a call link first.", false); return; }
+  window.open(url, "_blank", "noopener");
+  msg($("call-msg"), "Opening the family call in a new tab.", true);
+});
+
+function showCompanion(selfR, checkR, nudgeR) {
+  if (selfR && selfR.status === "ok") $("self-status").textContent = selfR.message;
+  if (checkR && checkR.status === "ok") {
+    $("checkin-status").textContent = checkR.message;
+    $("checkin-hours").value = checkR.interval_hours;
+    $("quiet-start").value = checkR.quiet_start || "21:00";
+    $("quiet-end").value = checkR.quiet_end || "08:00";
+    $("checkin-on").disabled = !!checkR.enabled;
+    $("checkin-off").disabled = !checkR.enabled;
+  }
+  if (nudgeR && nudgeR.status === "ok") $("nudge-status").textContent = nudgeR.message;
+}
+
+async function loadCompanion() {
+  const [selfR, checkR, nudgeR] = await Promise.all([
+    api("/settings/encourage_self_care", {}),
+    api("/settings/checkins", {}),
+    api("/settings/activity_nudges", {}),
+  ]);
+  showCompanion(selfR, checkR, nudgeR);
+}
+
+async function setSelf(enabled) {
+  clearMsg($("companion-msg"));
+  const r = await api("/settings/encourage_self_care", {enabled: enabled});
+  if (r.status === "ok") { $("self-status").textContent = r.message; msg($("companion-msg"), r.message, true); }
+  else msg($("companion-msg"), r.error || "Could not save.", false);
+}
+
+async function setCheckins(extra) {
+  clearMsg($("companion-msg"));
+  const body = Object.assign({
+    interval_hours: parseFloat($("checkin-hours").value || "3"),
+    quiet_start: $("quiet-start").value.trim(),
+    quiet_end: $("quiet-end").value.trim(),
+  }, extra || {});
+  const r = await api("/settings/checkins", body);
+  if (r.status === "ok") {
+    $("checkin-status").textContent = r.message;
+    $("checkin-on").disabled = !!r.enabled;
+    $("checkin-off").disabled = !r.enabled;
+    msg($("companion-msg"), r.message, true);
+  } else msg($("companion-msg"), r.error || "Could not save.", false);
+}
+
+async function setNudges(enabled) {
+  clearMsg($("companion-msg"));
+  const r = await api("/settings/activity_nudges", {enabled: enabled});
+  if (r.status === "ok") { $("nudge-status").textContent = r.message; msg($("companion-msg"), r.message, true); }
+  else msg($("companion-msg"), r.error || "Could not save.", false);
+}
+
+$("self-on").addEventListener("click", () => setSelf(true));
+$("self-off").addEventListener("click", () => setSelf(false));
+$("checkin-on").addEventListener("click", () => setCheckins({enabled: true}));
+$("checkin-off").addEventListener("click", () => setCheckins({enabled: false}));
+$("checkin-save").addEventListener("click", () => setCheckins({}));
+$("nudge-on").addEventListener("click", () => setNudges(true));
+$("nudge-off").addEventListener("click", () => setNudges(false));
+
+function calExportUrl(path) {
+  if (!path) return "";
+  const origin = window.location.origin;
+  const base = (BASE || "").replace(/\/$/, "");
+  return origin + (path.startsWith("/") ? path : (base + "/" + path));
+}
+
+function showCalendar(r) {
+  if (!r || r.error) {
+    $("cal-status").textContent = (r && r.error) || "Could not read calendar settings.";
+    return;
+  }
+  $("cal-status").textContent = r.message || "Calendar ready.";
+  $("cal-export").value = calExportUrl((BASE || "") + (r.export_path || ""));
+  $("cal-import").value = r.import_url || "";
+  let meta = "";
+  if (r.last_sync) meta = "Last sync: " + r.last_sync;
+  if (r.last_sync_error) meta += (meta ? " — " : "") + "Error: " + r.last_sync_error;
+  $("cal-sync-meta").textContent = meta;
+  const box = $("cal-proposals");
+  box.replaceChildren();
+  (r.proposals || []).forEach(p => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.marginTop = "6px";
+    const label = document.createElement("span");
+    label.className = "hint";
+    label.style.flex = "1";
+    label.textContent = (p.medicine_name || p.title) + " · " + (p.weekdays || "*") + " @ " + (p.time_hhmm || "?");
+    const acc = document.createElement("button");
+    acc.className = "primary";
+    acc.type = "button";
+    acc.textContent = "Accept";
+    acc.addEventListener("click", () => decideProposal(p.id, true));
+    const rej = document.createElement("button");
+    rej.type = "button";
+    rej.textContent = "Reject";
+    rej.addEventListener("click", () => decideProposal(p.id, false));
+    row.append(label, acc, rej);
+    box.appendChild(row);
+  });
+  const up = $("cal-upcoming");
+  up.replaceChildren();
+  if ((r.upcoming || []).length) {
+    const h = document.createElement("p");
+    h.className = "hint";
+    h.textContent = "Upcoming companion: " + r.upcoming.join("; ");
+    up.appendChild(h);
+  }
+}
+
+async function loadCalendar() {
+  showCalendar(await api("/settings/calendar", {}));
+}
+
+async function saveCalendar(extra) {
+  clearMsg($("cal-msg"));
+  const body = Object.assign({import_url: $("cal-import").value.trim()}, extra || {});
+  const r = await api("/settings/calendar", body);
+  if (r.status === "ok") { showCalendar(r); msg($("cal-msg"), r.message, true); }
+  else msg($("cal-msg"), r.error || "Could not save.", false);
+}
+
+async function decideProposal(id, accept) {
+  clearMsg($("cal-msg"));
+  const path = accept ? "/settings/calendar_accept" : "/settings/calendar_reject";
+  const r = await api(path, {id: id});
+  if (r.status === "ok") { msg($("cal-msg"), r.message, true); loadCalendar(); }
+  else msg($("cal-msg"), r.error || "Could not update proposal.", false);
+}
+
+$("cal-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("cal-export").value);
+    msg($("cal-msg"), "Subscribe URL copied.", true);
+  } catch (e) { msg($("cal-msg"), "Could not copy — select the URL and copy manually.", false); }
+});
+$("cal-rotate").addEventListener("click", () => saveCalendar({rotate_token: true}));
+$("cal-save-import").addEventListener("click", () => saveCalendar({}));
+$("cal-sync").addEventListener("click", () => saveCalendar({sync: true}));
+
 loadPeople();
 loadGuard();
 loadTz();
+loadAlerts();
+loadCall();
+loadCompanion();
+loadCalendar();
 </script></body></html>"""

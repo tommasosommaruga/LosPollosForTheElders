@@ -63,6 +63,28 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Profile: freer emotions (`play_emotion`, `dance`, `move_head`, `sweep_look`, …); package version bumped (health uses `__version__`)
 - Tests: `test_listen_mode.py`, passphrase master-switch coverage in `test_family_settings.py`
 
+## v0.8.0 — companion calendar (ICS) (done)
+
+- Bidirectional ICS: Family page subscribe URL (Outlook/Google/Apple) + paste import ICS URL
+- Medicine schedules stay source of truth in SQLite; export as `Med: …` events
+- Import: companion events auto-upsert; medicine-like items become **proposals** (Accept/Reject) before writing schedules
+- Voice tools: `list_upcoming_events`, `create_calendar_event`, `cancel_calendar_event`
+- Background sync loop (`MEDICINE_BUDDY_CALENDAR_SYNC`); works on laptop + Reachy Mini `/medicine`
+- Tests: `test_calendar.py`
+
+## v0.7 — elderly-care pillars (done)
+
+Maps geriatric needs onto the app, most effective first:
+
+1. **Caregiver alerts** — Missed doses POST to `MEDICINE_BUDDY_ALERT_URL` / Family page URL (ntfy or webhook); test button; activity log
+2. **Adaptive assist** — `encourage_self_care` (default on): dispense hints + profile prefer self-serve before arm
+3. **Companion check-ins** — idle `CheckInLoop` with quiet hours / interval; logged as activity
+4. **Family video bridge** — `family_call_url` + Family "Open call" + `start_family_call` tool (no WebRTC)
+5. **Activity prompts** — `suggest_activity` catalog (motor / cognitive / social) + optional nudges in check-ins
+6. Docs: README north star / roadmap, this plan, house-help build order
+
+Tests: `test_caregiver_alerts.py`, `test_companion_pillars.py`
+
 ## v0.6.2 — easier first-time passphrase + medicine setup (done)
 
 - `schedule_medicine` can enrol a new person with `new_passphrase` after they say it twice, then save the reminder in one flow

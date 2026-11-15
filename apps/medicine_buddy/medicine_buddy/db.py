@@ -120,6 +120,32 @@ class ActivityEvent:
     person_id: int | None = None
 
 
+CALENDAR_KINDS = ("companion", "medicine")
+CALENDAR_STATUSES = ("active", "cancelled", "proposed", "rejected")
+
+
+@dataclass(frozen=True)
+class CalendarEvent:
+    """Companion calendar row (and medicine import proposals). Medicine *schedules* stay in schedules."""
+
+    id: int
+    uid: str
+    kind: str  # companion | medicine
+    title: str
+    description: str
+    weekdays: str  # '*' / '0,2' / '' for one-shot without recurrence
+    time_hhmm: str
+    starts_at: str
+    ends_at: str
+    all_day: bool
+    person_id: int | None
+    medicine_name: str | None
+    source: str  # local | import
+    status: str  # active | cancelled | proposed | rejected
+    created_at: str
+    updated_at: str
+
+
 # Keep the robot DB lean: drop oldest rows past this budget / age.
 ACTIVITY_MAX_ROWS = 5_000
 ACTIVITY_MAX_AGE_DAYS = 30
@@ -254,6 +280,26 @@ class Database:
                     utterance_chars INTEGER,
                     person_id INTEGER REFERENCES people(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS calendar_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uid TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL CHECK (kind IN ('companion', 'medicine')),
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    weekdays TEXT NOT NULL DEFAULT '',
+                    time_hhmm TEXT NOT NULL DEFAULT '',
+                    starts_at TEXT NOT NULL DEFAULT '',
+                    ends_at TEXT NOT NULL DEFAULT '',
+                    all_day INTEGER NOT NULL DEFAULT 0,
+                    person_id INTEGER REFERENCES people(id),
+                    medicine_name TEXT,
+                    source TEXT NOT NULL DEFAULT 'local',
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'cancelled', 'proposed', 'rejected')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._migrate_medicines_per_person()
@@ -270,6 +316,9 @@ class Database:
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS ix_activity_person ON activity_events (person_id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_calendar_status ON calendar_events (status, kind)"
             )
             self._conn.commit()
 
@@ -547,6 +596,122 @@ class Database:
             "UPDATE schedules SET active = 0 WHERE id = ? AND active = 1", (schedule_id,)
         )
         return cur.rowcount == 1
+
+    # ---- companion calendar (medicine schedules stay in `schedules`)
+    _CAL_COLS = (
+        "id, uid, kind, title, description, weekdays, time_hhmm, starts_at, ends_at, "
+        "all_day, person_id, medicine_name, source, status, created_at, updated_at"
+    )
+
+    @staticmethod
+    def _calendar_event(row: sqlite3.Row) -> CalendarEvent:
+        return CalendarEvent(
+            id=row["id"],
+            uid=row["uid"],
+            kind=row["kind"],
+            title=row["title"],
+            description=row["description"] or "",
+            weekdays=row["weekdays"] or "",
+            time_hhmm=row["time_hhmm"] or "",
+            starts_at=row["starts_at"] or "",
+            ends_at=row["ends_at"] or "",
+            all_day=bool(row["all_day"]),
+            person_id=row["person_id"],
+            medicine_name=row["medicine_name"],
+            source=row["source"] or "local",
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def upsert_calendar_event(
+        self,
+        *,
+        uid: str,
+        kind: str,
+        title: str,
+        description: str = "",
+        weekdays: str = "",
+        time_hhmm: str = "",
+        starts_at: str = "",
+        ends_at: str = "",
+        all_day: bool = False,
+        person_id: int | None = None,
+        medicine_name: str | None = None,
+        source: str = "local",
+        status: str = "active",
+    ) -> CalendarEvent:
+        if kind not in CALENDAR_KINDS:
+            raise ValueError(f"Unknown calendar kind: {kind}")
+        if status not in CALENDAR_STATUSES:
+            raise ValueError(f"Unknown calendar status: {status}")
+        title = " ".join((title or "").split())[:200]
+        if not title:
+            raise ValueError("Calendar title must not be empty")
+        now = utc_now_iso()
+        existing = self.get_calendar_event_by_uid(uid)
+        if existing is None:
+            cur = self._write(
+                f"""INSERT INTO calendar_events
+                    (uid, kind, title, description, weekdays, time_hhmm, starts_at, ends_at,
+                     all_day, person_id, medicine_name, source, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    uid, kind, title, description.strip(), weekdays, time_hhmm, starts_at, ends_at,
+                    1 if all_day else 0, person_id, medicine_name, source, status, now, now,
+                ),
+            )
+            row = self._one(f"SELECT {self._CAL_COLS} FROM calendar_events WHERE id = ?", (cur.lastrowid,))
+            assert row is not None
+            return self._calendar_event(row)
+        self._write(
+            """UPDATE calendar_events SET kind = ?, title = ?, description = ?, weekdays = ?,
+               time_hhmm = ?, starts_at = ?, ends_at = ?, all_day = ?, person_id = ?,
+               medicine_name = ?, source = ?, status = ?, updated_at = ?
+             WHERE uid = ?""",
+            (
+                kind, title, description.strip(), weekdays, time_hhmm, starts_at, ends_at,
+                1 if all_day else 0, person_id, medicine_name, source, status, now, uid,
+            ),
+        )
+        updated = self.get_calendar_event_by_uid(uid)
+        assert updated is not None
+        return updated
+
+    def get_calendar_event(self, event_id: int) -> CalendarEvent | None:
+        row = self._one(f"SELECT {self._CAL_COLS} FROM calendar_events WHERE id = ?", (event_id,))
+        return None if row is None else self._calendar_event(row)
+
+    def get_calendar_event_by_uid(self, uid: str) -> CalendarEvent | None:
+        row = self._one(f"SELECT {self._CAL_COLS} FROM calendar_events WHERE uid = ?", (uid,))
+        return None if row is None else self._calendar_event(row)
+
+    def list_calendar_events(
+        self,
+        *,
+        status: str | None = "active",
+        kind: str | None = None,
+        limit: int = 200,
+    ) -> list[CalendarEvent]:
+        sql = f"SELECT {self._CAL_COLS} FROM calendar_events WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        if kind:
+            sql += " AND kind = ?"
+            params.append(kind)
+        rows = self._all(sql + " ORDER BY time_hhmm, id LIMIT ?", (*params, max(1, min(limit, 500))))
+        return [self._calendar_event(r) for r in rows]
+
+    def set_calendar_event_status(self, event_id: int, status: str) -> CalendarEvent | None:
+        if status not in CALENDAR_STATUSES:
+            raise ValueError(f"Unknown calendar status: {status}")
+        self._write(
+            "UPDATE calendar_events SET status = ?, updated_at = ? WHERE id = ?",
+            (status, utc_now_iso(), event_id),
+        )
+        return self.get_calendar_event(event_id)
 
     # ---- dose events
     def latest_dose_state(self, medicine_id: int) -> DoseState | None:
@@ -1075,7 +1240,10 @@ class Database:
             },
         }
 
-    _COUNTABLE = frozenset({"people", "medicines", "schedules", "memories", "dose_events", "activity_events"})
+    _COUNTABLE = frozenset({
+        "people", "medicines", "schedules", "memories", "dose_events", "activity_events",
+        "calendar_events",
+    })
 
     def count_rows(self, table: str, where: str = "") -> int:
         """COUNT(*) of a known table (the pages refresh often: never load whole tables to count them)."""

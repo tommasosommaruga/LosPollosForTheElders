@@ -19,11 +19,13 @@ Related notes: [`context.md`](context.md) · [`house-help-ideas.md`](house-help-
 
 ### North star (product vision)
 
-Help an older person live safer and more independently at home:
+Help an older person live safer and more independently at home, aligned with three geriatric pillars:
 
-1. **Medication care** — know *what* to take and *when*; remind gently; bring the correct closed box; check they took it.
-2. **Safe fetch & bring** — reduce bending/reaching (phone, water, remote, glasses) — see house-help ideas.
-3. **Companion** — conversation, memory (with consent), language practice, games, water/appointment reminders, caregiver alerts, help calls / scam call filtering, smart-home — longer roadmap in [`context.md`](context.md).
+1. **Chronic care continuity (medicines)** — know *what* to take and *when*; remind gently; bring the correct closed box only when needed; check they took it; **alert caregivers on Missed**.
+2. **Motor autonomy** — encourage self-care and light movement first; arm assist for fetch/bring when the person cannot safely reach (see [`house-help-ideas.md`](house-help-ideas.md); arm team owns hardware motion).
+3. **Cognitive / emotional + caregiver support** — companion chat, consented family memories, wellbeing check-ins, optional activity prompts, and a **family video-call link** for remote relatives.
+
+**Adaptive rule:** assist only where the person cannot manage physically or cognitively; otherwise stimulate activity and conversation so independence does not atrophy.
 
 We are **not** a doctor. No dosing advice, no opening packaging in the MVP, no lifting people.
 
@@ -32,10 +34,10 @@ We are **not** a doctor. No dosing advice, no opening packaging in the MVP, no l
 End-to-end **medicine reminder + dispense + adherence**:
 
 1. Person (by voice via Reachy) stores usual pills and recurrence → **SQLite schedule**.
-2. At due time (or force-trigger), Reachy says: *Time for your {name} — should I bring it?*
-3. On **yes**, dual arm cameras + OCR find the **standardized labeled box** (empty slots allowed).
+2. At due time (or force-trigger), Reachy reminds them and (when encourage-self-care is on) prefers that they take the box themselves; offers the arm only if they ask or cannot reach it.
+3. On clear **yes** to bringing it, dual arm cameras + OCR find the **standardized labeled box** (empty slots allowed).
 4. Arm replays taught motion: **slot → bowl** (bowl preferred over plate for detection).
-5. Arm cams **place-verify**; Reachy cam / voice confirms **taken** or logs **missed**.
+5. Arm cams **place-verify**; Reachy cam / voice confirms **taken** or logs **missed** (Missed can push a caregiver alert).
 
 **Locked technical choices**
 
@@ -379,15 +381,18 @@ See [`DEMO_CHECKLIST.md`](DEMO_CHECKLIST.md) and [`AGENTS.md`](AGENTS.md).
 | Area | MVP (this repo + arm team) | Later (from context.md) |
 |------|----------------------------|-------------------------|
 | Schedule DB + voice | Yes | Recurrence UX polish |
-| Remind + confirm + dispense | Yes | Caregiver SMS / web glance |
+| Remind + confirm + dispense | Yes | Stronger vision adherence |
+| Caregiver alert on Missed | Yes (ntfy / webhook) | SMS / email gateways |
+| Adaptive self-care first | Yes | Graded independence profiles |
+| Companion check-ins + memories | Yes | Language practice / games |
+| Family video-call link | Yes (URL bridge) | Embedded WebRTC |
+| Soft motor / cognitive prompts | Yes (voice) | Arm rehab reps (arm team) |
 | OCR + waypoints → bowl | Arm team | VLA / Dream-1 fallback |
-| Adherence watch | Voice + stub cam | Stronger Reachy vision |
 | Open packaging | No | Maybe supervised |
-| Life memory / language / games | No | Buddy features |
 | Smart home / scam calls / help | No | Companion platform |
 | Multi-arm chores | No | House fleet |
 
-Fetch/bring and rehab assist ideas remain in [`house-help-ideas.md`](house-help-ideas.md) for post-meds demos.
+Fetch/bring and arm rehab demos remain in [`house-help-ideas.md`](house-help-ideas.md) for the arm team after the meds loop is live.
 
 ---
 

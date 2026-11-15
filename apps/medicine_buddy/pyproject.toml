@@ -18,6 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# Classical OCR for papers held in front of Reachy (also needs system Tesseract).
+ocr = ["Pillow>=10.0", "pytesseract>=0.3.10"]
 
 [project.scripts]
 medicine-buddy = "medicine_buddy.cli:main"

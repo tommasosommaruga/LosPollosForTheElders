@@ -117,6 +117,18 @@ class DebugMixin:
             "timezone": self.settings_timezone({}),
             "reminders": (self.reminder_loop.status() if getattr(self, "reminder_loop", None)
                           else {"running": False, "note": "proactive reminders are off"}),
+            "checkins": (self.checkin_loop.status() if getattr(self, "checkin_loop", None)
+                         else {"running": False, "note": "companion check-ins are off"}),
+            "caregiver_alerts": {
+                "enabled": self.alerts_enabled(),
+                "configured": bool(self.alert_url()),
+                "last_error": getattr(self, "last_alert_error", None),
+            },
+            "companion": {
+                "encourage_self_care": self.encourage_self_care(),
+                "family_call_configured": bool(self.family_call_url()),
+                "activity_nudges": self.activity_nudges_enabled(),
+            },
             "uptime_s": int(time.time() - self.started_at),
             "app": {
                 "versions": versions,

@@ -166,6 +166,27 @@ class ReminderLoop:
             logger.info("Dose of %s marked Missed: %s", entry.medicine, detail)
         except ValueError as exc:  # e.g. the arm already placed it and it awaits a yes/no
             logger.info("Could not mark %s missed (%s)", entry.medicine, exc)
+            return
+        # Family push (ntfy / webhook) — never raises into the reminder loop.
+        notify = getattr(self.service, "notify_missed_dose", None)
+        if notify is None:
+            return
+        medicine = db.get_medicine(entry.medicine_id)
+        person_id = medicine.person_id if medicine else None
+        try:
+            local_time = self.service.now().strftime("%H:%M")
+        except Exception:  # noqa: BLE001
+            local_time = entry.scheduled.strftime("%H:%M")
+        try:
+            notify(
+                person=entry.person,
+                medicine=entry.medicine,
+                local_time=local_time,
+                person_id=person_id,
+                reminders_spoken=entry.count,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Caregiver alert after Missed failed")
 
     # ------------------------------------------------------------------ thread
     def start(self) -> None:

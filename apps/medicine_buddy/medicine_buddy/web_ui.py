@@ -118,7 +118,7 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
 
     Pass the service, or a zero-argument callable returning it (None while starting)."""
     from fastapi import Request
-    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
     service = _LazyService(service_or_provider)
     sessions = _Sessions()
@@ -225,6 +225,18 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
             return RedirectResponse(PREFIX, status_code=303)
         return html(render_family_page(s["csrf"], base=PREFIX, nav=_nav("family", s["who"])))
 
+    @app.get(PREFIX + "/calendar/{token}.ics")
+    def calendar_feed(token: str):
+        """Subscribe URL for Outlook / Google / Apple — token is the secret (no session)."""
+        ics = service.export_ics_for_token(token)
+        if ics is None:
+            return JSONResponse({"error": "unknown or revoked calendar link"}, 404)
+        return Response(
+            content=ics,
+            media_type="text/calendar; charset=utf-8",
+            headers={**headers(), "Content-Disposition": "inline; filename=medicine-buddy.ics"},
+        )
+
     # resolved per request (the service may not exist yet while the app starts)
     settings_routes = {
         "people": "settings_people",
@@ -233,6 +245,14 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         "passphrase": "settings_change_passphrase",
         "timezone": "settings_timezone",
         "require_passphrases": "settings_require_passphrases",
+        "caregiver_alerts": "settings_caregiver_alerts",
+        "encourage_self_care": "settings_encourage_self_care",
+        "family_call": "settings_family_call",
+        "checkins": "settings_checkins",
+        "activity_nudges": "settings_activity_nudges",
+        "calendar": "settings_calendar",
+        "calendar_accept": "accept_calendar_proposal",
+        "calendar_reject": "reject_calendar_proposal",
     }
 
     @app.post(PREFIX + "/settings/{name}")

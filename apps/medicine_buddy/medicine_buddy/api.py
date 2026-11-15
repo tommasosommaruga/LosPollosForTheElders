@@ -18,6 +18,11 @@ from urllib.parse import urlparse
 
 from medicine_buddy import __version__
 from medicine_buddy.access import PeopleAccessMixin
+from medicine_buddy.activities import ActivitiesMixin
+from medicine_buddy.calendar_service import CalendarMixin
+from medicine_buddy.caregiver_alerts import CaregiverAlertsMixin
+from medicine_buddy.checkins import CheckInsMixin
+from medicine_buddy.companion_settings import CompanionSettingsMixin
 from medicine_buddy.debug import DebugMixin
 from medicine_buddy.family_page import render_family_page
 from medicine_buddy.listen_mode import ListenModeMixin
@@ -53,7 +58,17 @@ def _whose(person: Person | None) -> str:
 
 
 class MedicineBuddyService(
-    PeopleAccessMixin, SettingsMixin, DebugMixin, ClockMixin, TranscriptMixin, ListenModeMixin,
+    PeopleAccessMixin,
+    SettingsMixin,
+    CaregiverAlertsMixin,
+    CompanionSettingsMixin,
+    CalendarMixin,
+    CheckInsMixin,
+    ActivitiesMixin,
+    DebugMixin,
+    ClockMixin,
+    TranscriptMixin,
+    ListenModeMixin,
 ):
     def __init__(
         self,
@@ -71,6 +86,10 @@ class MedicineBuddyService(
         self.guard.identify = self._identify_speakers  # recognise spoken passphrases
         self._lock = threading.Lock()  # serializes multi-step operations
         self._init_settings()
+        self._init_alerts()
+        self._init_companion_settings()
+        self._init_calendar()
+        self._init_activities()
         self._init_debug()
         self._init_transcript()
         self._init_listen_mode()
@@ -779,6 +798,12 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/memories/save": service.save_memory,
         "/memories/recall": service.recall_memories,
         "/memories/forget": service.forget_memory,
+        "/family/call": service.start_family_call,
+        "/activities/list": service.list_activities,
+        "/activities/suggest": service.suggest_activity,
+        "/calendar/upcoming": service.list_upcoming_events,
+        "/calendar/create": service.create_calendar_event,
+        "/calendar/cancel": service.cancel_calendar_event,
     }
     # Typed on the Family settings page only: never reachable by an AI tool.
     settings_routes = {
@@ -788,6 +813,14 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/settings/passphrase": service.settings_change_passphrase,
         "/settings/timezone": service.settings_timezone,
         "/settings/require_passphrases": service.settings_require_passphrases,
+        "/settings/caregiver_alerts": service.settings_caregiver_alerts,
+        "/settings/encourage_self_care": service.settings_encourage_self_care,
+        "/settings/family_call": service.settings_family_call,
+        "/settings/checkins": service.settings_checkins,
+        "/settings/activity_nudges": service.settings_activity_nudges,
+        "/settings/calendar": service.settings_calendar,
+        "/settings/calendar_accept": service.accept_calendar_proposal,
+        "/settings/calendar_reject": service.reject_calendar_proposal,
     }
     loopback = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 
@@ -878,6 +911,15 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
                     return
                 payload = service.events(medicine_id)
                 _send_json(self, 404 if "error" in payload else 200, payload)
+                return
+            # /calendar/<token>.ics — subscribe URL for Outlook / Google / Apple
+            if path.startswith("/calendar/") and path.endswith(".ics"):
+                token = path[len("/calendar/"):-len(".ics")]
+                ics = service.export_ics_for_token(token)
+                if ics is None:
+                    _send_json(self, 404, {"error": "unknown or revoked calendar link"})
+                    return
+                _send(self, 200, ics.encode("utf-8"), "text/calendar; charset=utf-8")
                 return
             _send_json(self, 404, {"error": f"unknown path {path}"})
 

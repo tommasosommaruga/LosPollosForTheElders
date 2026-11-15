@@ -222,14 +222,18 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
                                (time.perf_counter() - start) * 1000, payload, via="app-ui")
 
     def need_change_rights(request: Request) -> tuple[dict | None, JSONResponse | None]:
-        if cross_site(request):
-            return None, JSONResponse({"error": "requests from other websites are not allowed"}, 403)
+        # Validate the page token FIRST. Reachy Mini Control may embed /medicine in a
+        # shell that sets Sec-Fetch-Site: cross-site; a matching X-Family-Token still
+        # proves the request came from our page (double-submit), so allow it.
         s = session_for(request)
         if s is None:
             return None, JSONResponse({"error": "please sign in again"}, 401)
-        if not s.get("open") and not hmac.compare_digest(
-                request.headers.get("x-family-token", ""), s["csrf"]):
+        token = request.headers.get("x-family-token", "")
+        token_ok = bool(s.get("open")) or hmac.compare_digest(token, s["csrf"])
+        if not token_ok:
             return None, JSONResponse({"error": "invalid page token - reload the page"}, 403)
+        if cross_site(request) and not token:
+            return None, JSONResponse({"error": "requests from other websites are not allowed"}, 403)
         return s, None
 
     # ------------------------------------------------------------------ login
@@ -706,42 +710,73 @@ async function delRow(t, row) {{
       (t.name === "calendar_events" ? "\\n(Also removes Google copies + same title/time twins.)" : ""))) return;
   const body = {{ table: t.name }};
   if (t.id_column === "key") body.key = row[0];
-  else body.id = row[0];
+  else body.id = Number(row[0]);
   $("msg").textContent = "Deleting…";
-  const res = await fetch(P + "/data/delete", {{
-    method: "POST",
-    headers: {{ "Content-Type": "application/json", "X-Family-Token": TOKEN }},
-    body: JSON.stringify(body),
-  }});
-  const payload = await res.json().catch(() => ({{}}));
-  if (!res.ok) {{ $("msg").textContent = payload.error || ("Delete failed (" + res.status + ")"); return; }}
-  $("msg").textContent = payload.google_deleted && payload.google_deleted.length
-    ? ("Deleted locally + Google (" + payload.google_deleted.length + ").")
-    : "Deleted.";
-  await load();
+  $("msg").className = "muted";
+  try {{
+    const res = await fetch(P + "/data/delete", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json", "X-Family-Token": TOKEN }},
+      body: JSON.stringify(body),
+      credentials: "same-origin",
+    }});
+    const payload = await res.json().catch(() => ({{}}));
+    if (!res.ok) {{
+      $("msg").textContent = payload.error || ("Delete failed (HTTP " + res.status + ")");
+      $("msg").className = "bad";
+      return;
+    }}
+    const n = (payload.deleted && payload.deleted.ids) ? payload.deleted.ids.length : 1;
+    const g = (payload.google_deleted && payload.google_deleted.length) || 0;
+    $("msg").textContent = "Deleted " + n + " row(s)" + (g ? (" + " + g + " Google") : "") + ".";
+    $("msg").className = "ok";
+    await load();
+  }} catch (err) {{
+    $("msg").textContent = "Delete failed: " + (err && err.message ? err.message : err);
+    $("msg").className = "bad";
+  }}
 }}
 $("purge").onclick = async () => {{
   if (!confirm("Cancel duplicate companions (same title/time), then permanently delete all cancelled/rejected calendar rows?")) return;
   $("msg").textContent = "Purging…";
-  const res = await fetch(P + "/data/purge-calendar", {{
-    method: "POST",
-    headers: {{ "Content-Type": "application/json", "X-Family-Token": TOKEN }},
-    body: "{{}}",
-  }});
-  const payload = await res.json().catch(() => ({{}}));
-  if (!res.ok) {{ $("msg").textContent = payload.error || ("Purge failed (" + res.status + ")"); return; }}
-  $("msg").textContent = payload.message || "Purged.";
-  await load();
+  $("msg").className = "muted";
+  try {{
+    const res = await fetch(P + "/data/purge-calendar", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json", "X-Family-Token": TOKEN }},
+      body: "{{}}",
+      credentials: "same-origin",
+    }});
+    const payload = await res.json().catch(() => ({{}}));
+    if (!res.ok) {{
+      $("msg").textContent = payload.error || ("Purge failed (HTTP " + res.status + ")");
+      $("msg").className = "bad";
+      return;
+    }}
+    $("msg").textContent = payload.message || "Purged.";
+    $("msg").className = "ok";
+    await load();
+  }} catch (err) {{
+    $("msg").textContent = "Purge failed: " + (err && err.message ? err.message : err);
+    $("msg").className = "bad";
+  }}
 }};
+let loading = false;
 async function load() {{
-  const r = await fetch(P + "/data/tables", {{cache: "no-store"}});
-  if (r.status === 401) {{ location.href = P; return; }}
-  data = await r.json();
-  $("info").replaceChildren(...[["file", data.path], ["size", data.size_bytes == null ? "-" : Math.round(data.size_bytes / 1024) + " KB"]].map(([k, v]) => {{
-    const d = document.createElement("div"), a = document.createElement("span"), b = document.createElement("span"); a.textContent = k; b.textContent = v; d.append(a, b); return d; }}));
-  show();
+  if (loading) return;
+  loading = true;
+  try {{
+    const r = await fetch(P + "/data/tables", {{cache: "no-store", credentials: "same-origin"}});
+    if (r.status === 401) {{ location.href = P; return; }}
+    data = await r.json();
+    $("info").replaceChildren(...[["file", data.path], ["size", data.size_bytes == null ? "-" : Math.round(data.size_bytes / 1024) + " KB"]].map(([k, v]) => {{
+      const d = document.createElement("div"), a = document.createElement("span"), b = document.createElement("span"); a.textContent = k; b.textContent = v; d.append(a, b); return d; }}));
+    show();
+  }} finally {{
+    loading = false;
+  }}
 }}
-load(); setInterval(load, 5000);
+load(); setInterval(load, 8000);
 </script></main></body></html>"""
 
 

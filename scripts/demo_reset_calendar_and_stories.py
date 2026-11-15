@@ -50,6 +50,96 @@ def _load_dotenv(path: Path) -> None:
             os.environ[key] = val
 
 
+def _wipe_google_standalone(cfg) -> int:
+    """Wipe Google events without needing a new medicine_buddy install.
+
+    Prefers package helper when present; otherwise uses the same HTTP API inline
+    so this script works on an older robot pip install.
+    """
+    try:
+        from medicine_buddy.google_calendar import wipe_google_calendar_events
+
+        return wipe_google_calendar_events(cfg)
+    except ImportError:
+        pass
+
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    token_url = "https://oauth2.googleapis.com/token"
+    cal_api = "https://www.googleapis.com/calendar/v3"
+    data = urllib.parse.urlencode(
+        {
+            "grant_type": "refresh_token",
+            "client_id": cfg.client_id,
+            "client_secret": cfg.client_secret,
+            "refresh_token": cfg.refresh_token,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        token_url,
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        access = json.loads(resp.read().decode("utf-8")).get("access_token") or ""
+    if not access:
+        raise RuntimeError("Google token refresh returned no access_token")
+
+    def _http(method: str, url: str, body: dict | None = None, empty: bool = False) -> dict:
+        raw = None if body is None else json.dumps(body).encode("utf-8")
+        headers = {"Authorization": f"Bearer {access}", "Accept": "application/json"}
+        if raw is not None:
+            headers["Content-Type"] = "application/json"
+        r = urllib.request.Request(url, data=raw, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(r, timeout=20) as resp:
+                blob = resp.read()
+                if empty or not blob:
+                    return {}
+                return json.loads(blob.decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if method == "DELETE" and exc.code in {404, 410}:
+                return {}
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"Google {method} failed ({exc.code}): {detail}") from exc
+
+    deleted = 0
+    cal = urllib.parse.quote(cfg.calendar_id, safe="")
+    for single in (False, True):
+        page = None
+        while deleted < 500:
+            params: dict[str, str] = {
+                "maxResults": "250",
+                "singleEvents": "true" if single else "false",
+                "showDeleted": "false",
+            }
+            if page:
+                params["pageToken"] = page
+            url = f"{cal_api}/calendars/{cal}/events?{urllib.parse.urlencode(params)}"
+            raw = _http("GET", url)
+            items = raw.get("items") or []
+            if not items:
+                break
+            for item in items:
+                gid = str(item.get("id") or "").strip()
+                if not gid or str(item.get("status") or "").lower() == "cancelled":
+                    continue
+                _http(
+                    "DELETE",
+                    f"{cal_api}/calendars/{cal}/events/{urllib.parse.quote(gid, safe='')}",
+                    empty=True,
+                )
+                deleted += 1
+            page = str(raw.get("nextPageToken") or "").strip() or None
+            if not page:
+                break
+    return deleted
+
+
 ADARSH_STORY = (
     "My name is Adarsh. When I was a boy in Pune, my grandmother woke before sunrise "
     "to grind spices for the day's meals. The kitchen smelled of cumin and coriander, "
@@ -208,7 +298,7 @@ def main() -> int:
     _load_dotenv(robot_env)
 
     from medicine_buddy.db import Database, default_db_path
-    from medicine_buddy.google_calendar import load_google_cal_config, wipe_google_calendar_events
+    from medicine_buddy.google_calendar import load_google_cal_config
 
     db_path = args.db or Path(os.environ.get("MEDICINE_BUDDY_DB") or default_db_path())
     print(f"Database: {db_path}")
@@ -236,7 +326,7 @@ def main() -> int:
                 print("Google not configured — skip --wipe-google "
                       "(need client/secret/refresh + calendar id).")
             else:
-                n = wipe_google_calendar_events(cfg)
+                n = _wipe_google_standalone(cfg)
                 print(f"Google: deleted {n} event(s) from {cfg.calendar_id}")
 
         if args.wipe_local_calendar:

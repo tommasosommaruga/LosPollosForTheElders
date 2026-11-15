@@ -1,3 +1,4 @@
 """Medicine Buddy — Reachy Mini + Maker Arm medication assist MVP."""
 
-__version__ = "0.1.0"
+# Single source of truth — bump this on every shipped change (also drives pyproject).
+__version__ = "0.7.0"

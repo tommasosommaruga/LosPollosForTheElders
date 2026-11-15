@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from medicine_buddy import __version__
 from medicine_buddy.access import PeopleAccessMixin
 from medicine_buddy.debug import DebugMixin
 from medicine_buddy.family_page import render_family_page
@@ -103,7 +104,7 @@ class MedicineBuddyService(
             "status": "ok",
             "dry_run": self.config.dry_run,
             "service": "medicine-buddy",
-            "version": "0.3.0",
+            "version": __version__,
         }
 
     # ------------------------------------------------------------ catalog

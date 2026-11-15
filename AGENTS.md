@@ -21,6 +21,7 @@ ELSE:
 - Require OCR confidence above threshold before motion
 - Persist every dose state transition to SQLite
 - Prefer dry-run ports when hardware is unavailable
+- Bump `apps/medicine_buddy/medicine_buddy/__version__` on every shipped feature/fix before commit or robot install (drives pyproject + `/health`) so the robot shows a new version
 
 **Ask-first**
 - Live motor power / first hardware move of a session

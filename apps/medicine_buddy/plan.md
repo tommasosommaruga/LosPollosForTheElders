@@ -56,6 +56,13 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 - Names (`names.py`): one canonical key (case, accents, NFC/NFD, spacing) - "Nicolo" / "NICOLO" / "Nicolo" can no longer be two people; unique index + safe migration of existing databases (nothing deleted; duplicates flagged in the log); titles ("grandpa", "nonna") are stripped; a longer name such as "Mario Bianchi" is no longer silently treated as "Mario"; nameless registrations are rejected instead of crashing
 - Robot CPU: passphrase spotting is lazy + cached (newest sentence first, stops early, never on the audio path): ~2 ms per sentence instead of ~530 ms on a laptop (the robot's CPU is several times slower); dashboard/debug use COUNT queries and limits
 
+## v0.7.0 — demo passphrase switch + patient story listening (done)
+
+- Master `require_passphrases` setting (Family page / env, default off): one switch disables all spoken-passphrase + voice-guard checks while keeping the code
+- `listen_patiently` tool + live ServerVad silence stretch (~3.5s) only during story/memory dictation; restores normal ~0.7s after stop / save_memory / timeout
+- Profile: freer emotions (`play_emotion`, `dance`, `move_head`, `sweep_look`, …); package version bumped (health uses `__version__`)
+- Tests: `test_listen_mode.py`, passphrase master-switch coverage in `test_family_settings.py`
+
 ## v0.6.2 — easier first-time passphrase + medicine setup (done)
 
 - `schedule_medicine` can enrol a new person with `new_passphrase` after they say it twice, then save the reminder in one flow

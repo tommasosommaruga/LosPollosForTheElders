@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "medicine_buddy"  # = the Reachy Mini app name (must match the entry point below)
-version = "0.4.0"
+dynamic = ["version"]
 description = "Reachy Mini app: per-person medicine reminders, family memories and passphrase access control (Maker Arm dispense in dry-run)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,6 +25,9 @@ medicine-buddy = "medicine_buddy.cli:main"
 # Makes it a Reachy Mini app: the daemon / Reachy Mini Control list and start it.
 [project.entry-points."reachy_mini_apps"]
 medicine_buddy = "medicine_buddy.main:MedicineBuddy"
+
+[tool.setuptools.dynamic]
+version = {attr = "medicine_buddy.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]

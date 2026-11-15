@@ -384,3 +384,34 @@ def test_reminder_loop_retries_when_reachy_is_busy(parts, watcher) -> None:
     assert _wait(lambda: sp.state == "ready" and sp.is_idle())
     assert len(loop.tick(at(9, 1))) == 1 and len(state["said"]) == 1
     assert loop.status()["conversation"]["watching"] is True
+
+
+def test_sleeping_robot_is_woken_before_it_speaks(parts) -> None:
+    svc, loop, speaker, _ = parts
+    order: list[str] = []
+    loop.wake = lambda: order.append("wake") or True
+    orig = speaker.__call__
+    loop.speak = lambda text: order.append("speak") or orig(text)
+    assert loop.tick(at(8, 50)) == []
+    assert order == []                                  # nothing due yet: the robot is left alone
+    assert len(loop.tick(at(9, 0))) == 1
+    assert order == ["wake", "speak"]
+    assert loop.status()["last_woke"] is not None
+
+
+def test_a_failing_wake_up_does_not_stop_the_reminder(parts) -> None:
+    svc, loop, speaker, _ = parts
+
+    def broken() -> bool:
+        raise RuntimeError("motors unavailable")
+    loop.wake = broken
+    assert len(loop.tick(at(9, 0))) == 1
+
+
+def test_waker_only_wakes_a_sleeping_robot_and_rate_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from reachy_mini_conversation_app import app_lifecycle
+    from medicine_buddy.wake_robot import make_waker
+    calls: list[object] = []
+    monkeypatch.setattr(app_lifecycle, "wake_up_if_sleeping", lambda robot, log: calls.append(robot) or True)
+    wake = make_waker("robot", min_gap=60)
+    assert wake() is True and wake() is False and calls == ["robot"]   # second call inside the gap is skipped

@@ -137,9 +137,9 @@ class MedicineBuddy(ReachyMiniApp):
         port = int(os.environ.get("MEDICINE_BUDDY_PORT", "8787"))
         guard = os.environ.get("MEDICINE_BUDDY_VOICE_GUARD", "1").lower() not in {"0", "false", "no", "off"}
         db_path = default_db_path()
-        # dry_run stays true until arm URL is live; ARM_URL enables structured HTTP arm.v1 signals.
+        # Live arm path: dry_run=false; ARM_URL enables structured HTTP arm.v1 signals.
         service, server, _ = start_server(
-            host, port, db_path, load_app_config(dry_run=True), voice_guard=guard,
+            host, port, db_path, load_app_config(dry_run=False), voice_guard=guard,
         )
         _SERVICE = service
         _install_transcript_hook()

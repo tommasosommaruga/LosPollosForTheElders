@@ -51,23 +51,13 @@ def _load_dotenv(path: Path) -> None:
 
 
 def _wipe_google_standalone(cfg) -> int:
-    """Wipe Google events without needing a new medicine_buddy install.
-
-    Prefers package helper when present; otherwise uses the same HTTP API inline
-    so this script works on an older robot pip install.
-    """
-    try:
-        from medicine_buddy.google_calendar import wipe_google_calendar_events
-
-        return wipe_google_calendar_events(cfg)
-    except ImportError:
-        pass
-
+    """Empty Google calendar in one shot when possible (calendars.clear)."""
     import json
     import urllib.error
     import urllib.parse
     import urllib.request
 
+    print("  refreshing Google token…", flush=True)
     token_url = "https://oauth2.googleapis.com/token"
     cal_api = "https://www.googleapis.com/calendar/v3"
     data = urllib.parse.urlencode(
@@ -96,7 +86,7 @@ def _wipe_google_standalone(cfg) -> int:
             headers["Content-Type"] = "application/json"
         r = urllib.request.Request(url, data=raw, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(r, timeout=20) as resp:
+            with urllib.request.urlopen(r, timeout=30) as resp:
                 blob = resp.read()
                 if empty or not blob:
                     return {}
@@ -107,36 +97,45 @@ def _wipe_google_standalone(cfg) -> int:
             detail = exc.read().decode("utf-8", errors="replace")[:300]
             raise RuntimeError(f"Google {method} failed ({exc.code}): {detail}") from exc
 
-    deleted = 0
     cal = urllib.parse.quote(cfg.calendar_id, safe="")
-    for single in (False, True):
-        page = None
-        while deleted < 500:
-            params: dict[str, str] = {
-                "maxResults": "250",
-                "singleEvents": "true" if single else "false",
-                "showDeleted": "false",
-            }
-            if page:
-                params["pageToken"] = page
-            url = f"{cal_api}/calendars/{cal}/events?{urllib.parse.urlencode(params)}"
-            raw = _http("GET", url)
-            items = raw.get("items") or []
-            if not items:
-                break
-            for item in items:
-                gid = str(item.get("id") or "").strip()
-                if not gid or str(item.get("status") or "").lower() == "cancelled":
-                    continue
-                _http(
-                    "DELETE",
-                    f"{cal_api}/calendars/{cal}/events/{urllib.parse.quote(gid, safe='')}",
-                    empty=True,
-                )
-                deleted += 1
-            page = str(raw.get("nextPageToken") or "").strip() or None
-            if not page:
-                break
+    # One call empties the whole primary calendar.
+    print(f"  emptying Google calendar {cfg.calendar_id} (calendars.clear)…", flush=True)
+    try:
+        _http("POST", f"{cal_api}/calendars/{cal}/clear", {}, empty=True)
+        print("  Google calendar emptied.", flush=True)
+        return -1
+    except RuntimeError as exc:
+        print(f"  clear not allowed ({exc}); deleting event masters…", flush=True)
+
+    deleted = 0
+    page = None
+    while deleted < 500:
+        params: dict[str, str] = {
+            "maxResults": "250",
+            "singleEvents": "false",
+            "showDeleted": "false",
+        }
+        if page:
+            params["pageToken"] = page
+        url = f"{cal_api}/calendars/{cal}/events?{urllib.parse.urlencode(params)}"
+        raw = _http("GET", url)
+        items = raw.get("items") or []
+        if not items:
+            break
+        for item in items:
+            gid = str(item.get("id") or "").strip()
+            if not gid or str(item.get("status") or "").lower() == "cancelled":
+                continue
+            _http(
+                "DELETE",
+                f"{cal_api}/calendars/{cal}/events/{urllib.parse.quote(gid, safe='')}",
+                empty=True,
+            )
+            deleted += 1
+            print(f"  google delete #{deleted}: {str(item.get('summary') or gid)[:60]}", flush=True)
+        page = str(raw.get("nextPageToken") or "").strip() or None
+        if not page:
+            break
     return deleted
 
 
@@ -179,19 +178,10 @@ def _replace_stories(db, person, *, title: str, text: str) -> None:
 
 
 def _wipe_local_calendar(db) -> int:
-    rows = db.list_calendar_events(status=None, limit=500)
-    n = 0
-    for ev in rows:
-        if db.delete_calendar_event(ev.id):
-            n += 1
-    # Second pass in case of pagination/limit leftovers.
-    while True:
-        left = db.list_calendar_events(status=None, limit=500)
-        if not left:
-            break
-        for ev in left:
-            db.delete_calendar_event(ev.id)
-            n += 1
+    """Empty local calendar_events in one SQL statement."""
+    before = db._one("SELECT COUNT(*) AS n FROM calendar_events")
+    n = int(before["n"]) if before is not None else 0
+    db._write("DELETE FROM calendar_events")
     return n
 
 
@@ -327,7 +317,10 @@ def main() -> int:
                       "(need client/secret/refresh + calendar id).")
             else:
                 n = _wipe_google_standalone(cfg)
-                print(f"Google: deleted {n} event(s) from {cfg.calendar_id}")
+                if n < 0:
+                    print(f"Google: calendar emptied ({cfg.calendar_id})")
+                else:
+                    print(f"Google: deleted {n} event(s) from {cfg.calendar_id}")
 
         if args.wipe_local_calendar:
             n = _wipe_local_calendar(db)

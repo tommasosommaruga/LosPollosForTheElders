@@ -154,49 +154,80 @@ def delete_google_event(cfg: GoogleCalConfig, event_id: str) -> None:
         raise
 
 
-def wipe_google_calendar_events(cfg: GoogleCalConfig, *, max_delete: int = 500) -> int:
-    """Delete every non-cancelled event on the configured calendar (demo reset).
+def clear_google_calendar(cfg: GoogleCalConfig) -> None:
+    """Empty the whole calendar in one API call (``calendars.clear``).
 
-    Pass 1 deletes masters (``singleEvents=false``) so recurring series vanish.
-    Pass 2 expands instances (``singleEvents=true``) for any leftovers.
-    Returns how many delete calls succeeded.
+    Works for the account **primary** calendar. Secondary calendars may 400 —
+    callers should fall back to per-event deletes.
     """
     if not cfg.configured:
         raise RuntimeError("Google Calendar write is not configured")
+    token = _access_token(cfg)
+    cal = urllib.parse.quote(cfg.calendar_id, safe="")
+    url = f"{CAL_API}/calendars/{cal}/clear"
+    _http_json("POST", url, {}, token=token, expect_empty=True)
+
+
+def wipe_google_calendar_events(
+    cfg: GoogleCalConfig,
+    *,
+    max_delete: int = 500,
+    progress: Any | None = None,
+) -> int:
+    """Empty the configured Google calendar.
+
+    Prefers one-shot ``calendars.clear``. If that is refused (secondary calendar),
+    deletes event **masters** only (``singleEvents=false``) — never expands
+    recurring instances (that looked "stuck" on the robot).
+    Returns how many events were deleted (``-1`` if clear wiped the whole calendar).
+    """
+    if not cfg.configured:
+        raise RuntimeError("Google Calendar write is not configured")
+    try:
+        clear_google_calendar(cfg)
+        if progress is not None:
+            progress(-1, "calendars.clear (whole calendar emptied)")
+        return -1
+    except Exception as exc:  # noqa: BLE001
+        logger.info("calendars.clear unavailable (%s) — deleting masters instead", exc)
+        if progress is not None:
+            progress(0, f"clear failed ({exc}); deleting masters…")
+
     deleted = 0
-    for single in (False, True):
-        page_token: str | None = None
-        while deleted < max_delete:
-            token = _access_token(cfg)
-            cal = urllib.parse.quote(cfg.calendar_id, safe="")
-            params: dict[str, str] = {
-                "maxResults": "250",
-                "singleEvents": "true" if single else "false",
-                "showDeleted": "false",
-            }
-            if page_token:
-                params["pageToken"] = page_token
-            url = f"{CAL_API}/calendars/{cal}/events?{urllib.parse.urlencode(params)}"
-            raw = _http_json("GET", url, None, token=token)
-            items = raw.get("items") or []
-            if not items:
+    page_token: str | None = None
+    while deleted < max_delete:
+        token = _access_token(cfg)
+        cal = urllib.parse.quote(cfg.calendar_id, safe="")
+        params: dict[str, str] = {
+            "maxResults": "250",
+            "singleEvents": "false",
+            "showDeleted": "false",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        url = f"{CAL_API}/calendars/{cal}/events?{urllib.parse.urlencode(params)}"
+        raw = _http_json("GET", url, None, token=token)
+        items = raw.get("items") or []
+        if not items:
+            break
+        for item in items:
+            if deleted >= max_delete:
                 break
-            for item in items:
-                if deleted >= max_delete:
-                    break
-                gid = str(item.get("id") or "").strip()
-                if not gid:
-                    continue
-                if str(item.get("status") or "").lower() == "cancelled":
-                    continue
-                try:
-                    delete_google_event(cfg, gid)
-                    deleted += 1
-                except Exception as exc:  # noqa: BLE001
-                    logger.info("wipe skip %s: %s", gid, exc)
-            page_token = str(raw.get("nextPageToken") or "").strip() or None
-            if not page_token:
-                break
+            gid = str(item.get("id") or "").strip()
+            if not gid:
+                continue
+            if str(item.get("status") or "").lower() == "cancelled":
+                continue
+            try:
+                delete_google_event(cfg, gid)
+                deleted += 1
+                if progress is not None:
+                    progress(deleted, str(item.get("summary") or gid)[:60])
+            except Exception as exc:  # noqa: BLE001
+                logger.info("wipe skip %s: %s", gid, exc)
+        page_token = str(raw.get("nextPageToken") or "").strip() or None
+        if not page_token:
+            break
     return deleted
 
 

@@ -83,6 +83,17 @@ First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm
 
 - Reverted to pre-`0ab191f` (dropped nav + wake-robot); kept ICS UTC/TZID fix
 
+## v0.9.2 — arm listener + speak/log POST (done)
+
+- `integrations/arm/arm_listener.py` for arm PC (hooks: `run_dispense` / `run_check_taken` / `run_move_object`)
+- Buddy logs full JSON POST/response; Reachy `speak_hint` narrates sending the arm package
+
+## v0.9.1 — generic arm move_object (done)
+
+- Voice tool `move_object` (confirm-gated) POSTs `medicine_buddy.arm.v1` `/v1/move_object` for bottles and other graspables
+- Medicines still use `/v1/dispense`; empty ARM_URL → demo speak_hint; arm team owns vision/motion
+- Handoff: `docs/ARM_TEAM_HANDOFF.md`; tests in `test_arm_protocol.py`
+
 ## v0.8.3 — arm HTTP JSON protocol (done)
 
 - After voice confirm, Buddy POSTs structured `medicine_buddy.arm.v1` JSON to `MEDICINE_BUDDY_ARM_URL`

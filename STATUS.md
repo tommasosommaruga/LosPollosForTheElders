@@ -1,6 +1,6 @@
 # Medicine Buddy — current status (single check)
 
-**Last updated:** 2026-11-15 · **Code version in this checkout:** `0.9.0` (`medicine_buddy.__version__`)  
+**Last updated:** 2026-11-15 · **Code version in this checkout:** `0.9.1` (`medicine_buddy.__version__`)  
 **Last git commit on `main`:** `65fa163` — *Fix muted Reachy speech after patient-listen VAD patch.*
 
 Use this file to see **what is plugged in and working**, **what is partial / broken**, and **how the pipeline runs**, for **both** places the app lives.
@@ -33,6 +33,7 @@ Use this file to see **what is plugged in and working**, **what is partial / bro
 |----------|--------|--------|
 | Reachy Mini = voice companion (Pollen conversation app) | **Working** | `main.py` locks profile `medicine_caregiver` |
 | Maker Arm = pick labeled **closed** box → bowl | **Contract only** | `ports.py`; live path still Fake* |
+| Arm `move_object` for bottles / other graspables | **Contract** (`0.9.1`) | POST `/v1/move_object` JSON; arm team owns motion |
 | Classical OCR + taught waypoints (not VLA) | **PART** | Buddy `read_document` tool (Tesseract) for papers in front of Reachy; tray OCR + arm waypoints still stubs |
 | Confirm-before-move every time | **Working** | `run_dose` + voice guard + tool |
 | No dosing advice / no open packaging / no lift people | **Working (policy)** | profile + AGENTS.md |
@@ -182,7 +183,7 @@ Legend: **OK** = works end-to-end · **PART** = code present but incomplete/demo
 ## 7. Voice tools (profile `medicine_caregiver`)
 
 **On robot `main` (and base set):**  
-`register_person`, `list_people`, `save_memory`, `recall_person_memories`, `forget_memory`, `schedule_medicine`, `update_medicine_schedule`, `delete_medicine_schedule`, `list_medicines`, `check_due_medicines`, `dispense_medicine`, `mark_dose_taken`, emotions/head/camera/volume, `safe_web_search` (+ calendar / companion tools in newer installs).
+`register_person`, `list_people`, `save_memory`, `recall_person_memories`, `forget_memory`, `schedule_medicine`, `update_medicine_schedule`, `delete_medicine_schedule`, `list_medicines`, `check_due_medicines`, `dispense_medicine`, `move_object`, `mark_dose_taken`, emotions/head/camera/volume, `safe_web_search` (+ calendar / companion tools in newer installs).
 
 **Also in this laptop checkout (WIP):**  
 `start_family_call`, `suggest_activity`, `get_robot_time`, `list_upcoming_events` (with `when`), calendar create/cancel.

@@ -31,6 +31,7 @@ from medicine_buddy.companion_settings import CompanionSettingsMixin
 from medicine_buddy.debug import DebugMixin
 from medicine_buddy.family_page import render_family_page
 from medicine_buddy.listen_mode import ListenModeMixin
+from medicine_buddy.media_reset import MediaResetMixin
 from medicine_buddy.settings import SettingsMixin
 from medicine_buddy.catalog import MedicineCatalog
 from medicine_buddy.clock import ClockMixin
@@ -76,6 +77,7 @@ class MedicineBuddyService(
     ClockMixin,
     TranscriptMixin,
     ListenModeMixin,
+    MediaResetMixin,
 ):
     def __init__(
         self,
@@ -1051,7 +1053,6 @@ class MedicineBuddyService(
 _PAGE = """<!doctype html>
 <html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
-<meta http-equiv=refresh content=15>
 <title>Medicine Buddy</title>
 <style>
 :root{{--bg:#f7f7f5;--card:#fff;--fg:#1d1d1b;--muted:#77756f;--line:#e4e2dc;--accent:#2f6f4f;--due:#fff4d6}}
@@ -1059,7 +1060,8 @@ _PAGE = """<!doctype html>
 body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}}
 main{{max-width:900px;margin:0 auto;padding:24px 16px}}
 h1{{font-size:22px;margin:0 0 4px}} h2{{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}}
-.sub{{color:var(--muted);margin-bottom:20px}}
+.sub{{color:var(--muted);margin-bottom:20px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}}
+.sub button{{font:inherit;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:6px 12px;cursor:pointer}}
 section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px;overflow-x:auto}}
 table{{width:100%;border-collapse:collapse}} td,th{{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}}
 th{{font-weight:600;font-size:13px;color:var(--muted)}} tr:last-child td{{border-bottom:0}}
@@ -1076,14 +1078,19 @@ a{{color:var(--accent)}}
 </style></head><body><main>
 {nav}
 <h1>Medicine Buddy</h1>
-<div class=sub>Mode: {mode} &middot; updated {now} &middot; refreshes every 15 s</div>
+<div class=sub>
+  <span>Mode: {mode} &middot; updated {now} &middot; no auto-reload</span>
+  <button type=button onclick="location.reload()">Refresh</button>
+</div>
 <section><h2>People</h2><table><tr><th>Name</th><th>Role</th><th>Medicines</th><th>Memories</th></tr>{people}</table></section>
 <section><h2>Schedules</h2><table><tr><th>Person</th><th>Medicine</th><th>Time</th><th>Days</th><th></th><th></th></tr>{rows}</table></section>
 <section><h2>Family memories</h2><table><tr><th>Saved</th><th>From</th><th>Kind</th><th>Title (click to read)</th></tr>{memories}</table></section>
 <section><h2>Allowed medicines</h2>{chips}</section>
 <section><h2>Recent doses</h2><table><tr><th>When</th><th>Medicine</th><th>State</th><th>Detail</th></tr>{log}</table></section>
 <section><h2>Security</h2><p>{guard}</p><table><tr><th>When</th><th>Blocked action</th><th>Why</th></tr>{blocked}</table></section>
-</main></body></html>"""
+</main>
+<script>try {{ sessionStorage.removeItem("mb_start_delay_ms"); }} catch (e) {{}}</script>
+</body></html>"""
 
 
 # ---------------------------------------------------------------- HTTP plumbing
@@ -1168,6 +1175,7 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/settings/family_call": service.settings_family_call,
         "/settings/checkins": service.settings_checkins,
         "/settings/activity_nudges": service.settings_activity_nudges,
+        "/settings/reset_microphone": service.reset_microphone,
         "/settings/calendar": service.settings_calendar,
         "/settings/calendar_accept": service.accept_calendar_proposal,
         "/settings/calendar_reject": service.reject_calendar_proposal,

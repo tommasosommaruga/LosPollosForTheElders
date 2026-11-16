@@ -4,6 +4,16 @@
 
 First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm gate, OCR confidence gate, place verify, adherence voice fallback. Hardware Reachy/Maker Arm wired behind ports later.
 
+## v0.10.21 — stop dashboard auto-reload spam (done)
+
+- Removed `meta refresh` every 15s on GET `/medicine` (full page + DB rebuild)
+- Manual **Refresh** button instead; starting page uses slow backoff, not 2s hammering
+
+## v0.10.20 — reset microphone button (done)
+
+- Family + Debug pages: **Reset microphone** (daemon mic 100% + clear incoming audio, retries)
+- Removed `volume_control` from caregiver tools — it was spamming timed-out `/api/volume/microphone/set` during demos
+
 ## v0.10.19 — async arm so Reachy keeps listening (done)
 
 - Remote `/doses/run` returns immediately (`status=arm_working`); arm POST runs in a background thread

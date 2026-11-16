@@ -34,7 +34,6 @@ default_tools = [
   "stop_dance",
   "camera",
   "read_document",
-  "volume_control",
   "safe_web_search",
 ]
 +++

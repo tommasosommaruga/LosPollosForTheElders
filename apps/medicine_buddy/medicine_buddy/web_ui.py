@@ -319,6 +319,8 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         "family_call": "settings_family_call",
         "checkins": "settings_checkins",
         "activity_nudges": "settings_activity_nudges",
+        "demo_smooth": "settings_demo_smooth",
+        "reset_microphone": "reset_microphone",
         "calendar": "settings_calendar",
         "calendar_accept": "accept_calendar_proposal",
         "calendar_reject": "reject_calendar_proposal",
@@ -570,10 +572,21 @@ code{font-size:13px;word-break:break-all}
 
 
 _STARTING_PAGE = f"""<!doctype html><html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width, initial-scale=1"><meta http-equiv=refresh content=2>
+<meta name=viewport content="width=device-width, initial-scale=1">
 <title>Medicine Buddy - starting</title><style>{_BASE_CSS}</style></head><body><main>
-<h1>Medicine Buddy is starting&hellip;</h1><p class=muted>This page reloads by itself in a moment.</p>
-</main></body></html>"""
+<h1>Medicine Buddy is starting&hellip;</h1>
+<p class=muted id=note>Checking again in a few seconds&hellip;</p>
+</main>
+<script>
+// Slow backoff while the app boots — do not hammer GET /medicine every 2s.
+const key = "mb_start_delay_ms";
+let delay = Number(sessionStorage.getItem(key) || 3000);
+delay = Math.min(Math.max(delay, 3000), 15000);
+const n = document.getElementById("note");
+if (n) n.textContent = "Checking again in " + Math.round(delay / 1000) + "s…";
+sessionStorage.setItem(key, String(Math.min(delay + 2000, 15000)));
+setTimeout(() => location.reload(), delay);
+</script></body></html>"""
 
 
 def _login_page() -> str:
@@ -791,6 +804,10 @@ def _debug_page(csrf: str, nav: str) -> str:
   <label class=switch><input type=checkbox id=dbg> <span>Debug mode</span></label>
   <span class=muted id=dbgnote>When on: detailed Medicine Buddy logs (DEBUG level) in the app's log output.</span>
 </section>
+<section style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+  <button type=button id=micreset>Reset microphone</button>
+  <span class=muted id=micnote>Sets mic to 100% and clears audio buffers (fixes Control volume timeouts).</span>
+</section>
 <div class=grid>
   <section><h2>App</h2><div class=kv id=app></div></section>
   <section><h2>Voice guard</h2><div class=kv id=guard></div></section>
@@ -843,6 +860,24 @@ $("dbg").addEventListener("change", async e => {{
   await fetch(P + "/debug/toggle", {{method: "POST", headers: {{"Content-Type": "application/json", "X-Family-Token": TOKEN}},
     body: JSON.stringify({{enabled: e.target.checked}})}});
   refresh();
+}});
+$("micreset").addEventListener("click", async () => {{
+  $("micreset").disabled = true;
+  $("micnote").textContent = "Resetting microphone…";
+  try {{
+    const r = await fetch(P + "/settings/reset_microphone", {{
+      method: "POST",
+      headers: {{"Content-Type": "application/json", "X-Family-Token": TOKEN}},
+      body: JSON.stringify({{volume: 100}}),
+    }});
+    const d = await r.json();
+    $("micnote").textContent = d.message || d.error || (d.ok ? "Microphone reset." : "Reset failed.");
+    $("micnote").className = d.ok ? "ok" : "bad";
+  }} catch (e) {{
+    $("micnote").textContent = "Reset failed — is the robot daemon up?";
+    $("micnote").className = "bad";
+  }}
+  $("micreset").disabled = false;
 }});
 refresh(); setInterval(refresh, 3000);
 </script></main></body></html>"""

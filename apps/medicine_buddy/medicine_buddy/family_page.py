@@ -132,6 +132,15 @@ fingerprint. This page works only on this computer.
   <p class="hint" id="call-status" style="margin-top:10px">Coming soon — this mock-up shows where the family call link will live.</p>
 </section>
 
+<section class="panel" id="audiopanel">
+  <h2>Robot microphone</h2>
+  <p class="hint">If Reachy stops hearing you, or Control shows microphone volume timeouts, reset the mic here (sets input to 100% and clears audio buffers).</p>
+  <div class="row" style="margin-top:8px">
+    <button class="primary" type="button" id="mic-reset">Reset microphone</button>
+  </div>
+  <div class="msg" id="mic-msg"></div>
+</section>
+
 <section class="panel" id="companionpanel">
   <h2>Companion &amp; independence</h2>
   <p class="hint">Reachy should help only where needed, and gently stimulate chat, memory and movement the rest of the time.</p>
@@ -478,6 +487,17 @@ async function setNudges(enabled) {
   if (r.status === "ok") { $("nudge-status").textContent = r.message; msg($("companion-msg"), r.message, true); }
   else msg($("companion-msg"), r.error || "Could not save.", false);
 }
+
+$("mic-reset").addEventListener("click", async () => {
+  clearMsg($("mic-msg"));
+  $("mic-reset").disabled = true;
+  $("mic-reset").textContent = "Resetting…";
+  const r = await api("/settings/reset_microphone", {volume: 100});
+  $("mic-reset").disabled = false;
+  $("mic-reset").textContent = "Reset microphone";
+  if (r && r.ok) msg($("mic-msg"), r.message || "Microphone reset.", true);
+  else msg($("mic-msg"), (r && (r.message || r.error)) || "Could not reset microphone.", false);
+});
 
 $("self-on").addEventListener("click", () => setSelf(true));
 $("self-off").addEventListener("click", () => setSelf(false));

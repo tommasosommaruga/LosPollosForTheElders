@@ -67,6 +67,34 @@ def test_dispense_without_schedule_auto_enrols(svc: MedicineBuddyService) -> Non
     assert svc.db.get_medicine_by_name("Aspirin", person.id) is not None
 
 
+def test_delete_finds_paracetamol_despite_empty_demo_shell(svc: MedicineBuddyService) -> None:
+    """Regression: demo_smooth used to create an empty person-scoped Paracetamol on delete,
+    then report 'no active schedule' while the real reminder lived on another row."""
+    _enrol(svc)
+    person = svc.db.get_person_by_name("Tommaso")
+    assert person is not None
+    real = svc.db.add_medicine("Paracetamol", None)  # unassigned / legacy bucket
+    svc.db.add_schedule(real.id, "0,1,2,3,4,5,6", "09:00")
+    svc.db.add_medicine("Paracetamol", person.id)  # empty shell (old bug leftover)
+
+    ask = svc.delete_schedule({"name": "Paracetamol", "person": "Tommaso", "confirmed": False})
+    assert ask.get("status") == "needs_confirm", ask
+    assert "Paracetamol" in (ask.get("speak_hint") or "")
+
+    done = svc.delete_schedule({"name": "Paracetamol", "person": "Tommaso", "confirmed": True})
+    assert done.get("verified") is True, done
+    assert svc.db.list_schedules_for_medicine(real.id) == []
+
+
+def test_delete_does_not_auto_create_empty_medicine(svc: MedicineBuddyService) -> None:
+    _enrol(svc)
+    before = len(svc.db.list_medicines())
+    out = svc.delete_schedule({"name": "Paracetamol", "person": "Tommaso", "confirmed": True})
+    assert "error" in out
+    assert "no active schedule" in out["error"] or "no schedule saved" in out["error"]
+    assert len(svc.db.list_medicines()) == before
+
+
 def test_unknown_label_uses_dispense_not_move_object(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

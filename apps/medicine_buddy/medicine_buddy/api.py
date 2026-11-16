@@ -243,22 +243,58 @@ class MedicineBuddyService(
             "speak_hint": hint,
         }
 
+    def _medicines_named(self, name: str) -> list[Medicine]:
+        key = name.casefold()
+        return [m for m in self.db.list_medicines() if m.name.casefold() == key]
+
+    def _find_scheduled_medicine(
+        self, name: str, person: Person | None = None
+    ) -> Medicine | None:
+        """Prefer a medicine row that still has an active reminder (avoids empty demo shells)."""
+        candidates = self._medicines_named(name)
+        if person is not None:
+            for med in candidates:
+                if med.person_id == person.id and self.db.list_schedules_for_medicine(med.id):
+                    return med
+        scheduled = [m for m in candidates if self.db.list_schedules_for_medicine(m.id)]
+        if len(scheduled) == 1:
+            return scheduled[0]
+        if person is None and len(scheduled) > 1:
+            # Ambiguous across people — caller should pass person; pick nothing here.
+            return None
+        return scheduled[0] if scheduled else None
+
     def _known_medicine(
-        self, spoken: Any, person: Person | None = None
+        self,
+        spoken: Any,
+        person: Person | None = None,
+        *,
+        create_if_missing: bool = False,
     ) -> tuple[Medicine | None, dict[str, Any] | None]:
         name, err = self._recognize(spoken)
         if err:
-            # Demo smooth: free-form label (e.g. "small bottle") still goes to /v1/dispense
-            # as medicine.name — same shape as the working arm curl probe.
+            # Demo smooth + dispense only: free-form label (e.g. "small bottle") → /v1/dispense.
             text = " ".join(str(spoken or "").split())
-            if self.demo_smooth() and text:
+            if create_if_missing and self.demo_smooth() and text:
                 name = text
             else:
                 return None, err
-        medicine = self.db.get_medicine_by_name(name, person.id if person else None)
+
+        # Prefer a row that still has reminders. Demo_smooth used to create empty
+        # person-scoped shells on failed delete — those must not hide the real schedule.
+        medicine = self._find_scheduled_medicine(name, person)
         if medicine is None:
-            # Demo smooth: keep the schedule gate in code, but auto-enrol so the arm can grab.
-            if self.demo_smooth():
+            medicine = self.db.get_medicine_by_name(name, person.id if person else None)
+            if (
+                medicine is not None
+                and not create_if_missing
+                and not self.db.list_schedules_for_medicine(medicine.id)
+            ):
+                medicine = None
+        if medicine is None and person is not None:
+            medicine = self._find_scheduled_medicine(name, None)
+        if medicine is None:
+            if create_if_missing and self.demo_smooth():
                 medicine = self.db.add_medicine(name, person.id if person else None)
                 return medicine, None
             who = f"{person.name} doesn't" if person else "You don't"
@@ -458,9 +494,15 @@ class MedicineBuddyService(
     ) -> tuple[list[Schedule], dict[str, Any] | None]:
         schedules = self.db.list_schedules_for_medicine(medicine.id)
         if not schedules:
+            # Point at real reminders (and calendar mirrors) so Reachy doesn't invent emptiness.
+            listed = self.list_medicines().get("speak_hint") or ""
             return [], {
                 "error": f"no active schedule for {medicine.name}",
-                "speak_hint": f"You don't have any reminders set up for {medicine.name}.",
+                "speak_hint": (
+                    f"I couldn't find an active medicine reminder for {medicine.name}. "
+                    f"{listed} "
+                    "If you meant a calendar event (not a medicine reminder), use cancel_calendar_event."
+                ).strip(),
             }
         if time_raw:
             try:
@@ -614,7 +656,8 @@ class MedicineBuddyService(
         person, err = self._resolve_person(body.get("person"), strict=True)
         if err:
             return None, err
-        return self._known_medicine(spoken, person)
+        # Dispense may auto-enrol under demo_smooth; schedule edit/delete must not.
+        return self._known_medicine(spoken, person, create_if_missing=True)
 
     def run_dose(self, body: dict[str, Any]) -> dict[str, Any]:
         """Dispense to bowl. TTS stays on conversation app; return speak_hint only.

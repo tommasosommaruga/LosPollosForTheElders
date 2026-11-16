@@ -91,6 +91,7 @@ from reachy_mini import ReachyMini, ReachyMiniApp  # noqa: E402
 from reachy_mini_conversation_app import main as conversation  # noqa: E402
 from reachy_mini_conversation_app.conversation_handler import ConversationHandler  # noqa: E402
 from reachy_mini_conversation_app.profile_toolsets import (  # noqa: E402
+    read_profile_default_tool_names,
     read_profile_tool_names,
     write_profile_tool_override,
 )
@@ -110,25 +111,29 @@ _BLOCKED_PROFILE_TOOLS = frozenset({"volume_control"})
 
 
 def _sync_profile_tools_without_volume(instance_path: str) -> None:
-    """Strip volume_control from the robot's persisted tool override (if present).
+    """Persist caregiver tools without volume_control (Control UI can re-add it).
 
-    profile.md already omits it, but an older Control-UI override can still enable it.
-    That tool hangs on mic-set timeouts and leaves HF with pending function outputs.
+    profile.md already omits it, but a robot override often still enables it. That tool
+    hangs on mic-set timeouts and leaves HF with pending function outputs.
     """
     try:
         tools = read_profile_tool_names(PROFILE, instance_path)
     except Exception as exc:  # noqa: BLE001 — boot must continue even if toolsets are corrupt
         logger.warning("Could not read profile tools for %s: %s", PROFILE, exc)
-        return
-    blocked = [name for name in tools if name in _BLOCKED_PROFILE_TOOLS]
-    if not blocked:
-        return
+        try:
+            tools = read_profile_default_tool_names(PROFILE)
+        except Exception as exc2:  # noqa: BLE001
+            logger.warning("Could not read default profile tools: %s", exc2)
+            return
     cleaned = [name for name in tools if name not in _BLOCKED_PROFILE_TOOLS]
+    if cleaned == list(tools):
+        return
     try:
         write_profile_tool_override(PROFILE, cleaned, instance_path)
+        removed = sorted(set(tools) - set(cleaned))
         logger.info(
             "Removed %s from %s tool override (%d tools left)",
-            ", ".join(blocked),
+            ", ".join(removed),
             PROFILE,
             len(cleaned),
         )

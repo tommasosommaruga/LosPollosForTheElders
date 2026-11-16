@@ -1,0 +1,10 @@
+{
+  "energy drink can": {"category": "can", "aliases": ["energy drink", "can"]},
+  "water bottle": {"category": "bottle", "aliases": ["bottle"]},
+  "Feetech servo box": {"category": "box", "aliases": ["feetech box", "servo box"]},
+  "white box": {"category": "box", "aliases": []},
+  "foam ring": {"category": "foam", "aliases": ["white ring", "ring"]},
+  "blue pill box": {"category": "box", "aliases": ["blue pillbox"]},
+  "black glasses case": {"category": "case", "aliases": ["glasses case", "black case"]},
+  "white cup": {"category": "cup", "aliases": ["cup"]}
+}

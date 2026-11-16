@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/ciloglu44/lospollos-arm",
+  "commit": "c8b9797754ff0dbd4f1074ce155c11d3d4378062",
+  "note": "Local integration copy with vision contract, observation support and read-only mode. Includes upstream checkerboard helper and calibration reload. Helper defaults to controller/calib/camera.json. Upstream measured calibration, saved poses and moves are not installed as active robot configuration."
+}

@@ -1,0 +1,15 @@
+image,target,category,expected,x,y
+wrist1.jpeg,energy drink can,can,GO,847,350
+wrist1.jpeg,Feetech servo box,box,GO|AMBIGUOUS,360,590
+wrist1.jpeg,white box,box,AMBIGUOUS,,
+wrist1.jpeg,red soda can,can,NOT_FOUND,,
+wrist1.jpeg,water bottle,bottle,NOT_FOUND,,
+wrist1.jpeg,foam ring,foam,GO,600,360
+wrist1.jpeg,black glasses case,case,GO,300,320
+wrist2.jpeg,energy drink can,can,NOT_FOUND,,
+wrist2.jpeg,Feetech servo box,box,GO|AMBIGUOUS,805,420
+wrist2.jpeg,red soda can,can,NOT_FOUND,,
+wide1.jpeg,energy drink can,can,GO,1040,480
+wide1.jpeg,foam ring,foam,GO,1200,560
+wide2.jpeg,Feetech servo box,box,GO|AMBIGUOUS,1005,520
+wide2.jpeg,red soda can,can,NOT_FOUND,,

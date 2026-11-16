@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "calibration_id": null,
+  "validated": false,
+  "translation_units": "m",
+  "max_pair_skew_s": 0.03,
+  "cameras": {
+    "stand": {"camera_id": null, "image_size": null, "K": null, "distortion": null, "T_base_camera": null},
+    "hand": {"camera_id": null, "image_size": null, "K": null, "distortion": null, "T_gripper_camera": null}
+  }
+}

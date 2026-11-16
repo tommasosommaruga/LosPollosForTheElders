@@ -1,0 +1,8 @@
+{
+  "energy drink can":   {"height_cm": 13.5, "width_cm": 5.3, "grasp": "side", "grasp_height_frac": 0.5},
+  "water bottle":       {"height_cm": 22.0, "width_cm": 6.5, "grasp": "side", "grasp_height_frac": 0.4},
+  "Feetech servo box":  {"height_cm": 5.0,  "width_cm": 5.0, "grasp": "top"},
+  "white box":          {"height_cm": 4.0,  "width_cm": 5.0, "grasp": "top"},
+  "foam ring":          {"height_cm": 2.5,  "grasp": "top"},
+  "blue pill box":      {"height_cm": 3.0,  "width_cm": 4.0, "grasp": "auto"}
+}

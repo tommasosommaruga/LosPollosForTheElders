@@ -1,0 +1,5 @@
+# Hardware-free tests do not need Torch, SAM weights, Ollama or Station.
+numpy==2.5.4
+opencv-python-headless==5.0.0.93
+Pillow==13.0.0
+requests==2.34.2

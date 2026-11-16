@@ -1,0 +1,17 @@
+{
+  "calibration_id": "synthetic-test",
+  "stand_sequence": 1,
+  "hand_sequence": 1,
+  "stand_points_px": [
+    [
+      320,
+      240
+    ]
+  ],
+  "hand_points_px": [
+    [
+      240,
+      240
+    ]
+  ]
+}

@@ -67,6 +67,50 @@ def _open_rgb(jpeg_bytes: bytes):
     return image
 
 
+def paper_look_hint(jpeg_bytes: bytes) -> str | None:
+    """If a dark paper-like mass is off-centre, suggest left/right/up/down for the head.
+
+    Returns None when the page looks centred or framing cannot be measured.
+    """
+    if not jpeg_bytes:
+        return None
+    try:
+        image = _open_rgb(jpeg_bytes)
+        gray = image.convert("L")
+        width, height = gray.size
+        if width < 32 or height < 32:
+            return None
+        # Downsample for a cheap ink/edge centroid (darker than mid-grey).
+        sample = gray.resize((64, 48))
+        pixels = list(sample.getdata())
+        sw, sh = sample.size
+        mass = 0.0
+        cx = 0.0
+        cy = 0.0
+        for i, value in enumerate(pixels):
+            weight = max(0.0, 180.0 - float(value))
+            if weight <= 0:
+                continue
+            mass += weight
+            cx += weight * (i % sw)
+            cy += weight * (i // sw)
+        if mass < 1.0:
+            return None
+        cx /= mass
+        cy /= mass
+        dx = (cx / max(sw - 1, 1)) - 0.5
+        dy = (cy / max(sh - 1, 1)) - 0.5
+        # Need a clear bias before we move the head.
+        if abs(dx) < 0.12 and abs(dy) < 0.12:
+            return None
+        if abs(dx) >= abs(dy):
+            return "left" if dx < 0 else "right"
+        return "up" if dy < 0 else "down"
+    except Exception as exc:  # noqa: BLE001 — optional coaching only
+        logger.debug("paper_look_hint failed: %s", exc)
+        return None
+
+
 def assess_frame(jpeg_bytes: bytes) -> FrameCheck:
     """Coach holding position: light, contrast, and whether a capture is worth trying."""
     if not jpeg_bytes:
@@ -88,9 +132,19 @@ def assess_frame(jpeg_bytes: bytes) -> FrameCheck:
 
         image = _open_rgb(jpeg_bytes)
         gray = image.convert("L")
+        # Some broken frames yield an image with no histogram — Stat then crashes.
+        if gray.size[0] < 8 or gray.size[1] < 8:
+            raise ValueError("frame too small")
+        hist = gray.histogram()
+        if not hist:
+            raise ValueError("empty histogram")
         stat = ImageStat.Stat(gray)
-        brightness = float(stat.mean[0])
-        contrast = float(stat.stddev[0])
+        mean = getattr(stat, "mean", None) or []
+        stddev = getattr(stat, "stddev", None) or []
+        if not mean or not stddev:
+            raise ValueError("stat missing mean/stddev")
+        brightness = float(mean[0])
+        contrast = float(stddev[0])
         width, height = image.size
     except ImportError:
         return FrameCheck(

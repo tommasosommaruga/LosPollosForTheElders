@@ -75,7 +75,9 @@ def test_read_document_tool_has_guided_phases() -> None:
     assert "phase=guide" in src
     assert "phase=check" in src
     assert "phase=capture" in src
-    assert "hold still" in src.lower()
+    assert "phase=auto" in src
+    assert "tracking_off" in src or "set_head_tracking" in src
+    assert "hold still" in src.lower() or "head still" in src.lower()
     assert "UNTRUSTED" in src
 
 
@@ -86,8 +88,40 @@ def test_profile_lists_read_document_coaching() -> None:
         / "medicine_caregiver" / "profile.md"
     ).read_text(encoding="utf-8")
     assert '"read_document"' in profile
-    assert "phase=guide" in profile
-    assert "Hold still for one short second" in profile
+    assert "phase=auto" in profile
+    assert "freezes your head" in profile.lower() or "holds still" in profile.lower()
+
+
+def test_paper_look_hint_centred_is_none() -> None:
+    PIL = pytest.importorskip("PIL")
+    from PIL import Image, ImageDraw
+
+    from medicine_buddy.document_ocr import paper_look_hint
+
+    img = Image.new("RGB", (320, 240), color=(240, 240, 240))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((80, 60, 240, 180), fill=(30, 30, 30))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    # Roughly centred block — may be None or a weak direction; must not crash.
+    paper_look_hint(buf.getvalue())
+
+
+def test_read_document_never_raises_without_camera() -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from medicine_buddy.conversation.external_tools import read_document as rd
+
+    class _Deps:
+        camera_enabled = True
+        reachy_mini = SimpleNamespace(media=None)
+        movement_manager = None
+        motion_duration_s = 0.3
+
+    out = asyncio.run(rd.ReadDocument()(_Deps(), phase="auto"))
+    assert "error" in out or out.get("status") == "ok"
+    assert "speak_hint" in out
 
 
 def test_ocr_result_dataclass() -> None:

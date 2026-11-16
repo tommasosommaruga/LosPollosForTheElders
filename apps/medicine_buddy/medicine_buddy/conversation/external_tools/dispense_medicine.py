@@ -25,11 +25,13 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
 class DispenseMedicine(Tool):
     name = "dispense_medicine"
     description = (
-        "Ask the person first if you should bring the medicine. Only call this with "
-        "confirmed=true after they say yes. BEFORE that call, briefly say you are asking "
-        "the arm now and it may take a moment. This POSTs JSON to the Maker Arm PC to "
-        "find the labeled box and place it in the bowl (can take up to ~90s). "
-        "Always read the result speak_hint aloud when it returns. Do not invent dosing advice."
+        "Bring something with the Maker Arm via POST /v1/dispense. "
+        "Use for catalog medicines (Aspirin, Paracetamol) AND for bottles / blank pill / "
+        "'small bottle' / what they see — put their words in medicine_name. "
+        "Works even if not due / not scheduled (demo smooth). Prefer this over move_object. "
+        "Ask once if needed; call with confirmed=true after yes or after they already "
+        "said bring/give/take it. BEFORE that call, briefly say you are asking the arm. "
+        "Always read speak_hint. Do not invent dosing advice."
     )
     parameters_schema = {
         "type": "object",

@@ -249,7 +249,12 @@ def test_move_object_can_force_dispense_via_env(monkeypatch) -> None:
     assert arm.last_post_body["medicine"]["name"] == "small bottle"
 
 
-def test_api_move_object_needs_confirm_then_demo_ok(tmp_path: Path) -> None:
+def test_api_move_object_needs_confirm_then_demo_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Strict move_object path (demo_smooth redirects to dispense by default).
+    monkeypatch.setenv("MEDICINE_BUDDY_DEMO_SMOOTH", "0")
+    monkeypatch.delenv("MEDICINE_BUDDY_ARM_MOVE_VIA", raising=False)
     cat = MedicineCatalog({"Aspirin": []})
     svc = MedicineBuddyService(
         tmp_path / "move.db",
@@ -273,8 +278,12 @@ def test_api_move_object_needs_confirm_then_demo_ok(tmp_path: Path) -> None:
     assert "speak_hint" in done
 
 
-def test_api_move_object_unreachable_arm_gives_feedback(tmp_path: Path) -> None:
+def test_api_move_object_unreachable_arm_gives_feedback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Configured but dead ARM_URL must not hang — speak feedback and continue."""
+    monkeypatch.setenv("MEDICINE_BUDDY_DEMO_SMOOTH", "0")
+    monkeypatch.delenv("MEDICINE_BUDDY_ARM_MOVE_VIA", raising=False)
     cat = MedicineCatalog({"Aspirin": []})
     svc = MedicineBuddyService(
         tmp_path / "dead.db",
@@ -296,10 +305,15 @@ def test_api_move_object_unreachable_arm_gives_feedback(tmp_path: Path) -> None:
     assert "green bottle" in done["speak_hint"]
 
 
-def test_api_move_object_announces_progress_before_arm_post(tmp_path: Path, monkeypatch) -> None:
+def test_api_move_object_announces_progress_before_arm_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """While waiting on a reachable arm, speak a short wait line before the long POST."""
     from medicine_buddy import http_arm as http_arm_mod
+    from medicine_buddy.arm_protocol import MoveObjectResult
 
+    monkeypatch.setenv("MEDICINE_BUDDY_DEMO_SMOOTH", "0")
+    monkeypatch.delenv("MEDICINE_BUDDY_ARM_MOVE_VIA", raising=False)
     heard: list[str] = []
 
     class _OkArm(HttpArmClient):
@@ -307,8 +321,6 @@ def test_api_move_object_announces_progress_before_arm_post(tmp_path: Path, monk
             return True
 
         def move_object(self, **kwargs):
-            from medicine_buddy.arm_protocol import MoveObjectResult
-
             return MoveObjectResult(
                 request_id="r1",
                 ok=True,

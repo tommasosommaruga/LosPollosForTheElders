@@ -25,15 +25,10 @@ def _api_request(method: str, path: str, body: dict[str, Any] | None = None) -> 
 class MoveObject(Tool):
     name = "move_object"
     description = (
-        "Ask the Maker Arm to bring or move a graspable object that is NOT a scheduled medicine "
-        "(water bottle, closed box, similar rigid item the gripper can hold). "
-        "For medicine reminders use dispense_medicine instead. "
-        "Ask the person first; only call with confirmed=true after a clear yes. "
-        "BEFORE calling with confirmed=true, briefly say you are asking the arm now and "
-        "it may take a moment. The server also speaks a short wait line. "
-        "After the tool returns, always read speak_hint (placed / unreachable / error). "
-        "Refuse people, hot liquids, sharps, or opening packaging. "
-        "The arm team handles vision and motion; this only sends a JSON request."
+        "Legacy arm helper. For the live demo prefer dispense_medicine instead "
+        "(including bottles / small bottle / blank pill) — that POSTs /v1/dispense. "
+        "If you do call this, it redirects to the same dispense path when demo smooth is on. "
+        "Refuse people, hot liquids, sharps, or opening packaging."
     )
     parameters_schema = {
         "type": "object",

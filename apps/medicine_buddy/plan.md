@@ -4,6 +4,19 @@
 
 First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm gate, OCR confidence gate, place verify, adherence voice fallback. Hardware Reachy/Maker Arm wired behind ports later.
 
+## v0.10.18 — demo arm always /v1/dispense (done)
+
+- Free-form labels ("small bottle", blank pill) go through `dispense_medicine` → POST `/v1/dispense`
+- `move_object` redirects to the same dispense path when demo_smooth / ARM_MOVE_VIA=dispense
+- Profile prefers `dispense_medicine` for bottles too (matches working arm curl)
+
+## v0.10.17 — demo smooth arm (done)
+
+- `demo_smooth` (default ON, env `MEDICINE_BUDDY_DEMO_SMOOTH`): keep catalog/schedule/confirm code but ease for demos
+- Named catalog med with no schedule → auto-create medicine row and dispense
+- Profile + tools: prefer grabbing over refusing
+- Optional: `MEDICINE_BUDDY_ENCOURAGE_SELF=0` for arm-first prompts
+
 ## v0.10.16 — arm wait feedback + long tool timeout (done)
 
 - Speak a short progress line while arm HTTP is in flight (`speak_progress`)

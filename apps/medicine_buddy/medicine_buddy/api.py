@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime
@@ -150,6 +151,7 @@ class MedicineBuddyService(
             "arm_url": arm_url or None,
             "arm_reachable": arm_reachable,
             "encourage_self_care": self.encourage_self_care(),
+            "demo_smooth": self.demo_smooth(),
             "service": "medicine-buddy",
             "version": __version__,
         }
@@ -179,9 +181,19 @@ class MedicineBuddyService(
     ) -> tuple[Medicine | None, dict[str, Any] | None]:
         name, err = self._recognize(spoken)
         if err:
-            return None, err
+            # Demo smooth: free-form label (e.g. "small bottle") still goes to /v1/dispense
+            # as medicine.name — same shape as the working arm curl probe.
+            text = " ".join(str(spoken or "").split())
+            if self.demo_smooth() and text:
+                name = text
+            else:
+                return None, err
         medicine = self.db.get_medicine_by_name(name, person.id if person else None)
         if medicine is None:
+            # Demo smooth: keep the schedule gate in code, but auto-enrol so the arm can grab.
+            if self.demo_smooth():
+                medicine = self.db.add_medicine(name, person.id if person else None)
+                return medicine, None
             who = f"{person.name} doesn't" if person else "You don't"
             return None, {
                 "error": f"no schedule saved for {name}{_whose(person)}",
@@ -704,6 +716,9 @@ class MedicineBuddyService(
 
         Confirm-gated like dispense. Does not touch dose_events or the medicine catalog.
         Empty ARM_URL → demo success so voice still works offline.
+
+        Demo smooth / ARM_MOVE_VIA=dispense: prefer the working POST /v1/dispense path
+        (medicine.name = spoken label) instead of /v1/move_object.
         """
         label = " ".join(str(body.get("object_label") or body.get("label") or "").split())
         if not label:
@@ -711,6 +726,17 @@ class MedicineBuddyService(
                 "error": "object_label is required",
                 "speak_hint": "What should I ask the arm to bring?",
             }
+        # Prefer /v1/dispense — same as the working arm curl (name="small bottle").
+        force_dispense = (os.environ.get("MEDICINE_BUDDY_ARM_MOVE_VIA") or "").strip().lower() in {
+            "dispense", "v1/dispense", "/v1/dispense",
+        }
+        if self.demo_smooth() or force_dispense:
+            return self.run_dose({
+                "person": body.get("person"),
+                "medicine_name": label,
+                "confirmed": bool(body.get("confirmed", False)),
+                "stop_after_placed": True,
+            })
         destination = " ".join(str(body.get("destination") or "bowl").split()) or "bowl"
         kind_raw = str(body.get("kind_hint") or "").strip()
         kind_hint = kind_raw or None
@@ -1026,6 +1052,7 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/settings/require_passphrases": service.settings_require_passphrases,
         "/settings/caregiver_alerts": service.settings_caregiver_alerts,
         "/settings/encourage_self_care": service.settings_encourage_self_care,
+        "/settings/demo_smooth": service.settings_demo_smooth,
         "/settings/family_call": service.settings_family_call,
         "/settings/checkins": service.settings_checkins,
         "/settings/activity_nudges": service.settings_activity_nudges,

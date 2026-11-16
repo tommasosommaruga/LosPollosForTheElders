@@ -1,6 +1,7 @@
 """Companion / adaptive-care settings stored in app_settings (Family page + env).
 
 - encourage_self_care: prefer asking the person to take the box themselves before the arm
+- demo_smooth: keep catalog/schedule/confirm code, but ease them for live demos
 - family video call: mock / coming soon (no live link bridge yet)
 - check-in enable + quiet hours + interval
 """
@@ -13,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 ENCOURAGE_SELF_KEY = "encourage_self_care"
+DEMO_SMOOTH_KEY = "demo_smooth"
 CHECKIN_ENABLED_KEY = "checkins_enabled"
 FAMILY_CALL_COMING_SOON = (
     "Family video call is coming soon — not available yet. "
@@ -61,6 +63,38 @@ class CompanionSettingsMixin:
 
     def _init_companion_settings(self) -> None:
         return
+
+    def demo_smooth(self) -> bool:
+        """True = ease arm/catalog/schedule gates for demos (code paths stay).
+
+        Explicit ``MEDICINE_BUDDY_DEMO_SMOOTH`` in the environment always wins
+        (robot installs from laptop ``.env``). Otherwise the DB setting wins;
+        default ON for hackathon demos.
+        """
+        env = os.environ.get("MEDICINE_BUDDY_DEMO_SMOOTH")
+        if env is not None and str(env).strip() != "":
+            return str(env).strip().lower() in {"1", "true", "yes", "on"}
+        saved = self.db.get_setting(DEMO_SMOOTH_KEY)
+        if saved is not None and str(saved).strip() != "":
+            return str(saved).strip().lower() in {"1", "true", "yes", "on"}
+        return True
+
+    def settings_demo_smooth(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        body = body or {}
+        if "enabled" in body:
+            want = bool(body.get("enabled"))
+            self.db.set_setting(DEMO_SMOOTH_KEY, "1" if want else "0")
+        enabled = self.demo_smooth()
+        return {
+            "status": "ok",
+            "enabled": enabled,
+            "message": (
+                "Demo smooth is ON — bring bottle/medicine by name even without a schedule; "
+                "unknown labels go to the arm as move_object."
+                if enabled else
+                "Demo smooth is OFF — catalog + saved schedule required before dispense."
+            ),
+        }
 
     def encourage_self_care(self) -> bool:
         return _flag_from_db_or_env(

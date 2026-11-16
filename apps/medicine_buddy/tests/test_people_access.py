@@ -68,7 +68,9 @@ def test_passphrase_rules(phrase: str, ok: bool) -> None:
 # ---------------------------------------------------------------- guard OFF: passphrase as argument
 
 @pytest.fixture
-def svc(tmp_path: Path):
+def svc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Access-control tests need strict schedule gates (demo_smooth defaults ON).
+    monkeypatch.setenv("MEDICINE_BUDDY_DEMO_SMOOTH", "0")
     s = MedicineBuddyService(
         tmp_path / "p.db",
         AppConfig(dry_run=True, tray_labels=["ASPIRIN"]),

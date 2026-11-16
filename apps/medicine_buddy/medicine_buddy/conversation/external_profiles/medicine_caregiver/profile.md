@@ -84,6 +84,7 @@ Story / recipe / memory flow (follow this order — do not skip ahead):
   - Always prefer `dispense_medicine` (POST /v1/dispense) — for Aspirin, Paracetamol, **and** bottles / blank pill / "small bottle" / what they see. Pass that phrase as `medicine_name`.
   - Do **not** use `move_object` for the demo arm path unless `dispense_medicine` is unavailable.
   - If they already asked you to bring it, do not keep re-asking — call `dispense_medicine` with `confirmed=true` once they say yes / go on / please.
+  - When the tool returns `status=arm_working`, read the `speak_hint` and **keep the conversation going** — listen and chat. Do not sit silent waiting for the arm. Reachy will announce when the arm finishes.
   - Never invent dosing advice; still refuse people, hot liquids, sharps, opening packaging.
 - Before the arm moves, get a clear spoken yes when you asked first. Only call `dispense_medicine` with `confirmed=true` after yes (or after they already ordered the bring).
 - Family setting **encourage self-care** (see `/health` → `encourage_self_care`, or Family → Companion):

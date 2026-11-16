@@ -4,6 +4,13 @@
 
 First version: dry-run end-to-end dose pipeline with SQLite persistence, confirm gate, OCR confidence gate, place verify, adherence voice fallback. Hardware Reachy/Maker Arm wired behind ports later.
 
+## v0.10.19 — async arm so Reachy keeps listening (done)
+
+- Remote `/doses/run` returns immediately (`status=arm_working`); arm POST runs in a background thread
+- When done, `speak_progress` announces the result without blocking the conversation tool
+- `wait=true` or `MEDICINE_BUDDY_ARM_ASYNC=0` restores the old blocking behaviour
+- Profile: keep chatting while `arm_working`
+
 ## v0.10.18 — demo arm always /v1/dispense (done)
 
 - Free-form labels ("small bottle", blank pill) go through `dispense_medicine` → POST `/v1/dispense`

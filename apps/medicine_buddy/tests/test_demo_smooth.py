@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -97,11 +98,65 @@ def test_unknown_label_uses_dispense_not_move_object(
     ask = svc.run_dose({"medicine_name": "small bottle", "confirmed": False})
     assert ask.get("status") == "needs_confirm"
     assert ask.get("medicine", {}).get("name") == "small bottle"
-    done = svc.run_dose({"medicine_name": "small bottle", "confirmed": True})
+    done = svc.run_dose({
+        "medicine_name": "small bottle", "confirmed": True, "wait": True,
+    })
     assert done.get("final_state") == "Placed", done
     assert done.get("medicine", {}).get("name") == "small bottle"
     assert done.get("arm_remote") is True
     assert "object" not in done
+
+
+def test_remote_dispense_returns_immediately_async(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from medicine_buddy import api as api_mod
+    from medicine_buddy.arm_protocol import DispenseResult
+    from medicine_buddy.http_arm import HttpArmClient
+
+    started = threading.Event()
+    release = threading.Event()
+    heard: list[str] = []
+
+    class _SlowDispense(HttpArmClient):
+        def probe_reachable(self, timeout_s: float = 2.0) -> bool:
+            return True
+
+        def dispense(self, **kwargs):
+            started.set()
+            release.wait(timeout=5)
+            return DispenseResult(
+                request_id="r1", ok=True, final_state="placed",
+                detect_detail="ok", place_verified=False,
+            )
+
+    monkeypatch.setenv("MEDICINE_BUDDY_DEMO_SMOOTH", "1")
+    monkeypatch.setenv("MEDICINE_BUDDY_ARM_ASYNC", "1")
+    monkeypatch.setattr(api_mod, "HttpArmClient", _SlowDispense)
+    cat = MedicineCatalog({"Aspirin": []})
+    svc = MedicineBuddyService(
+        tmp_path / "async.db",
+        AppConfig(dry_run=False, arm_url="http://arm.test:9090"),
+        cat,
+        VoiceGuard(cat, enabled=False),
+    )
+    svc.progress_speaker = lambda text: heard.append(text) or True
+    t0 = time.perf_counter()
+    out = svc.run_dose({"medicine_name": "Aspirin", "confirmed": True})
+    elapsed = time.perf_counter() - t0
+    assert out.get("status") == "arm_working", out
+    assert elapsed < 1.0, f"tool blocked for {elapsed:.2f}s"
+    assert "keep talking" in (out.get("speak_hint") or "").lower()
+    assert started.wait(timeout=2)
+    assert svc.arm_job_busy() is True
+    release.set()
+    for _ in range(50):
+        if not svc.arm_job_busy():
+            break
+        time.sleep(0.05)
+    assert svc.arm_job_busy() is False
+    assert any("Aspirin" in h or "bowl" in h.lower() for h in heard), heard
 
 
 def test_move_object_redirects_to_dispense(
@@ -136,7 +191,9 @@ def test_move_object_redirects_to_dispense(
     ask = svc.move_object({"object_label": "small bottle", "confirmed": False})
     assert ask.get("status") == "needs_confirm"
     assert ask.get("medicine", {}).get("name") == "small bottle"
-    done = svc.move_object({"object_label": "small bottle", "confirmed": True})
+    done = svc.move_object({
+        "object_label": "small bottle", "confirmed": True, "wait": True,
+    })
     assert done.get("final_state") == "Placed", done
     assert done.get("medicine", {}).get("name") == "small bottle"
 

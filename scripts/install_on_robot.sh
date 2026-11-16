@@ -63,6 +63,7 @@ ARM_TIMEOUT="$(_read_env_key MEDICINE_BUDDY_ARM_TIMEOUT_S)"
 DRY_RUN="$(_read_env_key MEDICINE_BUDDY_DRY_RUN)"
 MOVE_VIA="$(_read_env_key MEDICINE_BUDDY_ARM_MOVE_VIA)"
 DEMO_SMOOTH="$(_read_env_key MEDICINE_BUDDY_DEMO_SMOOTH)"
+ARM_ASYNC="$(_read_env_key MEDICINE_BUDDY_ARM_ASYNC)"
 ENCOURAGE_SELF="$(_read_env_key MEDICINE_BUDDY_ENCOURAGE_SELF)"
 GOOGLE_CLIENT_ID="$(_read_env_key MEDICINE_BUDDY_GOOGLE_CLIENT_ID)"
 GOOGLE_CLIENT_SECRET="$(_read_env_key MEDICINE_BUDDY_GOOGLE_CLIENT_SECRET)"
@@ -75,6 +76,9 @@ if [[ -z "${REQUIRE_PASSPHRASES}" ]]; then
 fi
 if [[ -z "${DEMO_SMOOTH}" ]]; then
   DEMO_SMOOTH="1"
+fi
+if [[ -z "${ARM_ASYNC}" ]]; then
+  ARM_ASYNC="1"
 fi
 if [[ -z "${ENCOURAGE_SELF}" ]]; then
   ENCOURAGE_SELF="0"
@@ -110,6 +114,7 @@ sync_robot_env() {
       echo "MEDICINE_BUDDY_ARM_MOVE_VIA=${MOVE_VIA}"
     fi
     echo "MEDICINE_BUDDY_DEMO_SMOOTH=${DEMO_SMOOTH}"
+    echo "MEDICINE_BUDDY_ARM_ASYNC=${ARM_ASYNC}"
     echo "MEDICINE_BUDDY_ENCOURAGE_SELF=${ENCOURAGE_SELF}"
     if [[ -n "${GOOGLE_CLIENT_ID}" ]]; then
       echo "MEDICINE_BUDDY_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}"
@@ -142,11 +147,11 @@ mkdir -p \"\$DATA_DIR\"
 umask 077
 touch \"\$ENV_FILE\"
 tmp=\"\$(mktemp)\"
-grep -vE \"^[[:space:]]*MEDICINE_BUDDY_(ARM_URL|ARM_TIMEOUT_S|DRY_RUN|ARM_MOVE_VIA|DEMO_SMOOTH|ENCOURAGE_SELF|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|GOOGLE_REFRESH_TOKEN|GOOGLE_CALENDAR_ID|REQUIRE_PASSPHRASES)=\" \"\$ENV_FILE\" >\"\$tmp\" || true
+grep -vE \"^[[:space:]]*MEDICINE_BUDDY_(ARM_URL|ARM_TIMEOUT_S|DRY_RUN|ARM_MOVE_VIA|DEMO_SMOOTH|ARM_ASYNC|ENCOURAGE_SELF|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|GOOGLE_REFRESH_TOKEN|GOOGLE_CALENDAR_ID|REQUIRE_PASSPHRASES)=\" \"\$ENV_FILE\" >\"\$tmp\" || true
 cat \"\$tmp\" /tmp/medicine_buddy_sync.env >\"\$ENV_FILE\"
 rm -f \"\$tmp\" /tmp/medicine_buddy_sync.env
 echo \"--- robot .env (synced keys, secrets redacted) ---\"
-grep -E \"^[[:space:]]*MEDICINE_BUDDY_(ARM_|DRY_RUN|DEMO_SMOOTH|ENCOURAGE_SELF|GOOGLE_|REQUIRE_PASSPHRASES)\" \"\$ENV_FILE\" \\
+grep -E \"^[[:space:]]*MEDICINE_BUDDY_(ARM_|DRY_RUN|DEMO_SMOOTH|ARM_ASYNC|ENCOURAGE_SELF|GOOGLE_|REQUIRE_PASSPHRASES)\" \"\$ENV_FILE\" \\
   | sed -E \"s/(GOOGLE_CLIENT_SECRET|GOOGLE_REFRESH_TOKEN)=.*/\\1=(set)/\" || true
 "'
   rm -f "$frag"

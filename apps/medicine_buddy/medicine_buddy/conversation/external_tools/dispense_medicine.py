@@ -31,7 +31,9 @@ class DispenseMedicine(Tool):
         "Works even if not due / not scheduled (demo smooth). Prefer this over move_object. "
         "Ask once if needed; call with confirmed=true after yes or after they already "
         "said bring/give/take it. BEFORE that call, briefly say you are asking the arm. "
-        "Always read speak_hint. Do not invent dosing advice."
+        "Returns quickly with status=arm_working — read speak_hint, KEEP chatting/listening; "
+        "the arm finishes in the background and Reachy will announce when done. "
+        "Do not invent dosing advice."
     )
     parameters_schema = {
         "type": "object",

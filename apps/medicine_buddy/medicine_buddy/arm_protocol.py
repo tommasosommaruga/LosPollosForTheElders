@@ -22,8 +22,22 @@ SCHEMA = "medicine_buddy.arm.v1"
 DISPENSE_PATH = "/v1/dispense"
 CHECK_TAKEN_PATH = "/v1/check_taken"
 MOVE_OBJECT_PATH = "/v1/move_object"
+DEFAULT_DESTINATION = "bowl"
 
 FINAL_STATES = frozenset({"placed", "failed", "aborted"})
+
+
+def normalize_destination(raw: object | None) -> str:
+    """Place target for the arm. Default bowl; use the spoken/specified place when set."""
+    cleaned = " ".join(str(raw or DEFAULT_DESTINATION).split())
+    return cleaned or DEFAULT_DESTINATION
+
+
+def dispense_actions_for(destination: str) -> tuple[str, ...]:
+    """Keep pick_to_bowl for the default place; generic pick/place otherwise."""
+    if normalize_destination(destination).casefold() == DEFAULT_DESTINATION:
+        return ("locate", "pick_to_bowl", "verify_place")
+    return ("locate", "pick", "place", "verify_place")
 
 
 @dataclass(frozen=True)
@@ -41,6 +55,7 @@ class DispenseCommand:
     ocr_min_confidence: float = 0.65
     # Soft deadline for the arm PC: stop searching if the object is gone / never matched.
     timeout_seconds: float = 60.0
+    destination: str = DEFAULT_DESTINATION
     actions: tuple[str, ...] = ("locate", "pick_to_bowl", "verify_place")
     one_shot_detect: bool = True
     dry_run: bool = False
@@ -48,6 +63,11 @@ class DispenseCommand:
     message_type: str = "dispense"
 
     def to_json(self) -> str:
+        dest = normalize_destination(self.destination)
+        actions = self.actions if self.actions else dispense_actions_for(dest)
+        # If caller left the default bowl actions but destination changed, adapt.
+        if dest.casefold() != DEFAULT_DESTINATION and actions == ("locate", "pick_to_bowl", "verify_place"):
+            actions = dispense_actions_for(dest)
         payload = {
             "schema": self.schema,
             "message_type": self.message_type,
@@ -56,7 +76,8 @@ class DispenseCommand:
             "slot_hint": self.slot_hint,
             "ocr_min_confidence": self.ocr_min_confidence,
             "timeout_seconds": float(self.timeout_seconds),
-            "actions": list(self.actions),
+            "destination": dest,
+            "actions": list(actions),
             "one_shot_detect": self.one_shot_detect,
             "dry_run": self.dry_run,
         }

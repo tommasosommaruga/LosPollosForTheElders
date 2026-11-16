@@ -47,6 +47,7 @@ Code: `medicine_buddy/arm_protocol.py`, client: `medicine_buddy/http_arm.py`.
   "medicine": { "id": 12, "name": "Aspirin", "person": "Mario" },
   "slot_hint": null,
   "ocr_min_confidence": 0.65,
+  "destination": "bowl",
   "actions": ["locate", "pick_to_bowl", "verify_place"],
   "one_shot_detect": true,
   "dry_run": false

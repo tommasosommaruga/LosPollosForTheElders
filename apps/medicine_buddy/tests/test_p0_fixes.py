@@ -74,7 +74,7 @@ def test_real_arm_still_says_bowl(tmp_path: Path) -> None:
     s.add_schedule({"name": "Aspirin", "weekdays": "daily", "time": "09:00"})
     # the fake ports are still used by the service, so only the wording path is checked here
     r = s.run_dose({"medicine_name": "Aspirin", "confirmed": True})
-    assert r["demo_mode"] is False and "in the bowl" in r["speak_hint"]
+    assert r["demo_mode"] is False and "bowl" in r["speak_hint"].lower()
     s.close()
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from medicine_buddy.arm_protocol import DEFAULT_DESTINATION, normalize_destination
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database
 from medicine_buddy.http_arm import HttpArmClient
@@ -32,12 +33,14 @@ class DoseStateMachine:
         *,
         stop_after_placed: bool = False,
         person_name: str | None = None,
+        destination: str = DEFAULT_DESTINATION,
     ) -> DoseState:
         medicine = self.db.get_medicine(medicine_id)
         if medicine is None:
             raise ValueError(f"Unknown medicine_id={medicine_id}")
 
         name = medicine.name
+        dest = normalize_destination(destination)
         self.db.record_transition(
             medicine_id, DoseState.DUE, detail="dose due", from_state=DoseState.IDLE
         )
@@ -66,6 +69,7 @@ class DoseStateMachine:
                 name,
                 person_name=person_name,
                 stop_after_placed=stop_after_placed,
+                destination=dest,
             )
 
         return self._run_local_ports(
@@ -79,8 +83,10 @@ class DoseStateMachine:
         *,
         person_name: str | None,
         stop_after_placed: bool,
+        destination: str = DEFAULT_DESTINATION,
     ) -> DoseState:
         assert isinstance(self.arm, HttpArmClient)
+        dest = normalize_destination(destination)
         # Reachy should say this aloud (via speak_hint) while the JSON POST is in flight.
         self.buddy.speak(
             f"Okay — I'm sending a request to the arm to bring your {name} now."
@@ -96,6 +102,7 @@ class DoseStateMachine:
                 medicine_id=medicine_id,
                 medicine_name=name,
                 person=person_name,
+                destination=dest,
             )
         except Exception as exc:  # noqa: BLE001
             self.buddy.speak(
@@ -128,7 +135,7 @@ class DoseStateMachine:
             detail=result.detect_detail or f"label={result.label} score={result.score}",
         )
         self.buddy.speak(
-            f"The arm placed your {name} in the bowl. Please take it."
+            f"The arm placed your {name} at the {dest}. Please take it."
         )
 
         if stop_after_placed:

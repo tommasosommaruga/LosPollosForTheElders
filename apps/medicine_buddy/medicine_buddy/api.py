@@ -38,7 +38,12 @@ from medicine_buddy.clock import ClockMixin
 from medicine_buddy.config import AppConfig
 from medicine_buddy.db import Database, Medicine, Person, Schedule
 from medicine_buddy.dry_run import FakeAdherence, FakeArm, FakeVision
-from medicine_buddy.arm_protocol import MoveObjectResult, new_request_id
+from medicine_buddy.arm_protocol import (
+    DEFAULT_DESTINATION,
+    MoveObjectResult,
+    new_request_id,
+    normalize_destination,
+)
 from medicine_buddy.http_arm import HttpArmClient
 from medicine_buddy.orchestrator import DoseStateMachine
 from medicine_buddy.scheduler import find_due_doses
@@ -660,7 +665,7 @@ class MedicineBuddyService(
         return self._known_medicine(spoken, person, create_if_missing=True)
 
     def run_dose(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Dispense to bowl. TTS stays on conversation app; return speak_hint only.
+        """Dispense to a place (default bowl). TTS stays on conversation app; speak_hint only.
 
         With a live remote arm (default), returns immediately with status=arm_working so
         Reachy can keep listening; the arm POST runs in a background thread and Speaky
@@ -670,6 +675,7 @@ class MedicineBuddyService(
         # Default pause after place so Reachy conversation asks "did you take it?"
         stop_after_placed = bool(body.get("stop_after_placed", True))
         wait_sync = bool(body.get("wait", False)) or not self.arm_async_enabled()
+        destination = normalize_destination(body.get("destination"))
 
         with self._lock:
             medicine, err = self._resolve_medicine(body)
@@ -687,11 +693,13 @@ class MedicineBuddyService(
                     return blocked
             if not confirmed:
                 self.guard.ask(key)
+                where = f" to the {destination}" if destination != DEFAULT_DESTINATION else ""
                 return {
                     "status": "needs_confirm",
                     "medicine": {"id": medicine.id, "name": medicine.name},
+                    "destination": destination,
                     "speak_hint": (
-                        f"Time for your {medicine.name} medicine — should I bring it? "
+                        f"Time for your {medicine.name} medicine — should I bring it{where}? "
                         "If they say yes, call dispense_medicine again with confirmed=true."
                     ),
                 }
@@ -737,6 +745,7 @@ class MedicineBuddyService(
                     "stop_after_placed": stop_after_placed,
                     "remote": remote,
                     "job_gen": job_gen,
+                    "destination": destination,
                 },
                 name=f"arm-dose-{medicine_id}",
                 daemon=True,
@@ -748,11 +757,12 @@ class MedicineBuddyService(
                 "arm_remote": True,
                 "demo_mode": False,
                 "medicine": {"id": medicine_id, "name": medicine_name},
+                "destination": destination,
                 "arm_timeout_s": timeout_s,
                 "speak_hint": (
-                    f"Okay — I'm asking the arm to bring your {medicine_name} now. "
-                    "Keep talking with me while it works; I'll tell you when it's in the bowl "
-                    f"(or if it can't find it within about {timeout_s:.0f} seconds)."
+                    f"Okay — I'm asking the arm to bring your {medicine_name} to the "
+                    f"{destination} now. Keep talking with me while it works; I'll tell you "
+                    f"when it's there (or if it can't find it within about {timeout_s:.0f} seconds)."
                 ),
             }
 
@@ -763,6 +773,7 @@ class MedicineBuddyService(
             stop_after_placed=stop_after_placed,
             remote=remote,
             arm_unreachable=arm_unreachable,
+            destination=destination,
         )
 
     def _arm_dose_job(
@@ -774,6 +785,7 @@ class MedicineBuddyService(
         stop_after_placed: bool,
         remote: HttpArmClient,
         job_gen: int,
+        destination: str = DEFAULT_DESTINATION,
     ) -> None:
         """Background: POST /v1/dispense, then speak the result so conversation stays free."""
         hint: str | None = None
@@ -786,6 +798,7 @@ class MedicineBuddyService(
                 remote=remote,
                 arm_unreachable=False,
                 announce_start=False,
+                destination=destination,
             )
             raw_hint = str(result.get("speak_hint") or "").strip()
             if raw_hint:
@@ -813,19 +826,21 @@ class MedicineBuddyService(
         remote: HttpArmClient | None,
         arm_unreachable: bool,
         announce_start: bool = True,
+        destination: str = DEFAULT_DESTINATION,
     ) -> dict[str, Any]:
         """Run the dose state machine and build the tool/announce payload.
 
         Does not hold ``self._lock`` during the arm HTTP wait — otherwise every other
         API call (including arm_busy checks) blocks for the full search timeout.
         """
+        dest = normalize_destination(destination)
         buddy = SilentBuddy(confirm=True, adherence_taken=None)
         vision = FakeVision(self.config)
         arm: FakeArm | HttpArmClient = remote if remote is not None else FakeArm()
         if remote is not None and announce_start:
             self.announce_progress(
-                f"Okay — I'm asking the arm to bring your {medicine_name} now. "
-                "One moment."
+                f"Okay — I'm asking the arm to bring your {medicine_name} to the "
+                f"{dest} now. One moment."
             )
         adherence = FakeAdherence(buddy, auto_taken=None)
         machine = DoseStateMachine(
@@ -836,6 +851,7 @@ class MedicineBuddyService(
             medicine_id,
             stop_after_placed=stop_after_placed,
             person_name=person_name,
+            destination=dest,
         )
         with self._lock:
             events = [
@@ -870,7 +886,7 @@ class MedicineBuddyService(
                     " ".join(messages[-2:])
                     if len(messages) >= 2
                     else (
-                        f"The arm placed your {medicine_name} in the bowl. Please take it. "
+                        f"The arm placed your {medicine_name} at the {dest}. Please take it. "
                         "Then ask if they took it and call mark_dose_taken."
                     )
                 )
@@ -880,7 +896,7 @@ class MedicineBuddyService(
                     )
             else:
                 speak_hint = (
-                    f"Your {medicine_name} is in the bowl. Please take it. "
+                    f"Your {medicine_name} is at the {dest}. Please take it. "
                     "Then ask if they took it and call mark_dose_taken."
                 )
         else:
@@ -891,6 +907,7 @@ class MedicineBuddyService(
             "final_state": final.value,
             "demo_mode": demo,
             "arm_remote": arm_remote,
+            "destination": dest,
             "medicine": {"id": medicine_id, "name": medicine_name},
             "messages": messages,
             "events": events,
@@ -953,6 +970,7 @@ class MedicineBuddyService(
         force_dispense = (os.environ.get("MEDICINE_BUDDY_ARM_MOVE_VIA") or "").strip().lower() in {
             "dispense", "v1/dispense", "/v1/dispense",
         }
+        destination = normalize_destination(body.get("destination"))
         if self.demo_smooth() or force_dispense:
             return self.run_dose({
                 "person": body.get("person"),
@@ -960,8 +978,8 @@ class MedicineBuddyService(
                 "confirmed": bool(body.get("confirmed", False)),
                 "stop_after_placed": True,
                 "wait": bool(body.get("wait", False)),
+                "destination": destination,
             })
-        destination = " ".join(str(body.get("destination") or "bowl").split()) or "bowl"
         kind_raw = str(body.get("kind_hint") or "").strip()
         kind_hint = kind_raw or None
         confirmed = bool(body.get("confirmed", False))

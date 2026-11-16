@@ -44,6 +44,27 @@ def test_dispense_command_roundtrip_json() -> None:
     assert data["one_shot_detect"] is True
     assert data["actions"] == ["locate", "pick_to_bowl", "verify_place"]
     assert data["timeout_seconds"] == 60.0
+    assert data["destination"] == "bowl"
+
+
+def test_dispense_destination_defaults_bowl_and_overrides() -> None:
+    from medicine_buddy.arm_protocol import DispenseCommand, MedicineRef, normalize_destination
+
+    assert normalize_destination(None) == "bowl"
+    assert normalize_destination("  table ") == "table"
+    bowl = DispenseCommand(
+        request_id="r1",
+        medicine=MedicineRef(id=1, name="Aspirin"),
+    )
+    assert parse_json_body(bowl.to_json())["destination"] == "bowl"
+    table = DispenseCommand(
+        request_id="r2",
+        medicine=MedicineRef(id=1, name="Aspirin"),
+        destination="table",
+    )
+    data = parse_json_body(table.to_json())
+    assert data["destination"] == "table"
+    assert data["actions"] == ["locate", "pick", "place", "verify_place"]
 
 
 def test_dispense_result_parse() -> None:

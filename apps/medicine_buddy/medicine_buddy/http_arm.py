@@ -15,6 +15,7 @@ PROBE_TIMEOUT_S = 2.0
 
 from medicine_buddy.arm_protocol import (
     CHECK_TAKEN_PATH,
+    DEFAULT_DESTINATION,
     DISPENSE_PATH,
     MOVE_OBJECT_PATH,
     CheckTakenCommand,
@@ -25,7 +26,9 @@ from medicine_buddy.arm_protocol import (
     MoveObjectCommand,
     MoveObjectResult,
     ObjectRef,
+    dispense_actions_for,
     new_request_id,
+    normalize_destination,
     parse_json_body,
 )
 from medicine_buddy.config import AppConfig
@@ -106,15 +109,19 @@ class HttpArmClient:
         medicine_name: str,
         person: str | None = None,
         slot_hint: int | None = None,
+        destination: str = DEFAULT_DESTINATION,
         request_id: str | None = None,
     ) -> DispenseResult:
         rid = request_id or new_request_id()
+        dest = normalize_destination(destination)
         cmd = DispenseCommand(
             request_id=rid,
             medicine=MedicineRef(id=medicine_id, name=medicine_name, person=person),
             slot_hint=slot_hint,
             ocr_min_confidence=self.ocr_min_confidence,
             timeout_seconds=self.timeout_s,
+            destination=dest,
+            actions=dispense_actions_for(dest),
             dry_run=self.dry_run,
         )
         try:
@@ -186,13 +193,14 @@ class HttpArmClient:
         force_dispense = (os.environ.get("MEDICINE_BUDDY_ARM_MOVE_VIA") or "").strip().lower() in {
             "dispense", "v1/dispense", "/v1/dispense",
         }
+        dest = normalize_destination(destination)
         if force_dispense:
-            result = self._move_via_dispense(label=label, request_id=rid)
+            result = self._move_via_dispense(label=label, destination=dest, request_id=rid)
         else:
             cmd = MoveObjectCommand(
                 request_id=rid,
                 object=ObjectRef(label=label, kind_hint=kind_hint or None),
-                destination=destination or "bowl",
+                destination=dest,
                 timeout_seconds=self.timeout_s,
                 dry_run=self.dry_run,
             )
@@ -219,7 +227,9 @@ class HttpArmClient:
                         "arm /v1/move_object not found; falling back to /v1/dispense for %r",
                         label,
                     )
-                    result = self._move_via_dispense(label=label, request_id=rid)
+                    result = self._move_via_dispense(
+                        label=label, destination=dest, request_id=rid,
+                    )
         self.last_move = result
         logger.info(
             "arm move_object_result request_id=%s ok=%s state=%s label=%s",
@@ -227,12 +237,19 @@ class HttpArmClient:
         )
         return result
 
-    def _move_via_dispense(self, *, label: str, request_id: str) -> MoveObjectResult:
+    def _move_via_dispense(
+        self,
+        *,
+        label: str,
+        destination: str = DEFAULT_DESTINATION,
+        request_id: str,
+    ) -> MoveObjectResult:
         """Map a graspable label onto /v1/dispense (arm locates by name)."""
         dispense = self.dispense(
             medicine_id=0,
             medicine_name=label,
             person=None,
+            destination=destination,
             request_id=request_id,
         )
         return MoveObjectResult(

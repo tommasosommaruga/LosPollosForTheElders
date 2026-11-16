@@ -159,6 +159,69 @@ def test_remote_dispense_returns_immediately_async(
     assert any("Aspirin" in h or "bowl" in h.lower() for h in heard), heard
 
 
+def test_release_arm_unlocks_busy_while_search_hangs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from medicine_buddy import api as api_mod
+    from medicine_buddy.arm_protocol import DispenseResult
+    from medicine_buddy.http_arm import HttpArmClient
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class _SlowDispense(HttpArmClient):
+        def probe_reachable(self, timeout_s: float = 2.0) -> bool:
+            return True
+
+        def dispense(self, **kwargs):
+            started.set()
+            release.wait(timeout=5)
+            return DispenseResult(
+                request_id="r1", ok=False, final_state="failed",
+                error="object gone", detect_detail="miss",
+            )
+
+    monkeypatch.setenv("MEDICINE_BUDDY_DEMO_SMOOTH", "1")
+    monkeypatch.setenv("MEDICINE_BUDDY_ARM_ASYNC", "1")
+    monkeypatch.setattr(api_mod, "HttpArmClient", _SlowDispense)
+    cat = MedicineCatalog({"ice cream": []})
+    svc = MedicineBuddyService(
+        tmp_path / "release.db",
+        AppConfig(dry_run=False, arm_url="http://arm.test:9090"),
+        cat,
+        VoiceGuard(cat, enabled=False),
+    )
+    first = svc.run_dose({"medicine_name": "ice cream", "confirmed": True})
+    assert first.get("status") == "arm_working"
+    assert started.wait(timeout=2)
+    assert svc.arm_job_busy() is True
+    busy = svc.run_dose({"medicine_name": "ice cream", "confirmed": True})
+    assert busy.get("status") == "arm_busy"
+    freed = svc.release_arm_job({})
+    assert freed.get("ok") is True and freed.get("was_busy") is True
+    assert svc.arm_job_busy() is False
+    release.set()
+    time.sleep(0.2)
+    # Stale job must not re-lock after a force release.
+    assert svc.arm_job_busy() is False
+
+
+def test_dispense_timeout_becomes_failed_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    from medicine_buddy.http_arm import HttpArmClient
+
+    arm = HttpArmClient("http://arm.test:9090", timeout_s=12.0)
+
+    def _boom(path: str, body: str):
+        raise RuntimeError(f"arm timed out after 12s at http://arm.test:9090{path}")
+
+    monkeypatch.setattr(arm, "_post", _boom)
+    result = arm.dispense(medicine_id=1, medicine_name="ice cream")
+    assert result.ok is False and result.final_state == "failed"
+    assert "timed out" in (result.error or "").lower()
+    assert "ice cream" in (result.error or "").lower()
+
+
 def test_move_object_redirects_to_dispense(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

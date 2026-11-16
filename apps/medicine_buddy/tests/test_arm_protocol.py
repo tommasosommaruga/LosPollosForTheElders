@@ -43,6 +43,7 @@ def test_dispense_command_roundtrip_json() -> None:
     assert data["medicine"]["name"] == "Aspirin"
     assert data["one_shot_detect"] is True
     assert data["actions"] == ["locate", "pick_to_bowl", "verify_place"]
+    assert data["timeout_seconds"] == 60.0
 
 
 def test_dispense_result_parse() -> None:

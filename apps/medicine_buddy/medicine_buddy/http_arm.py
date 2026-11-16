@@ -114,10 +114,26 @@ class HttpArmClient:
             medicine=MedicineRef(id=medicine_id, name=medicine_name, person=person),
             slot_hint=slot_hint,
             ocr_min_confidence=self.ocr_min_confidence,
+            timeout_seconds=self.timeout_s,
             dry_run=self.dry_run,
         )
-        raw = self._post(DISPENSE_PATH, cmd.to_json())
-        result = DispenseResult.from_dict(raw, fallback_request_id=rid)
+        try:
+            raw = self._post(DISPENSE_PATH, cmd.to_json())
+            result = DispenseResult.from_dict(raw, fallback_request_id=rid)
+        except RuntimeError as exc:
+            if not _is_timeout_error(exc):
+                raise
+            # Object gone / wrong label / arm searching forever — fail cleanly so busy unlocks.
+            result = DispenseResult(
+                request_id=rid,
+                ok=False,
+                final_state="failed",
+                detect_detail="timeout",
+                error=(
+                    f"arm timed out after {self.timeout_s:.0f}s looking for "
+                    f"{medicine_name!r} (object missing or not recognized)"
+                ),
+            )
         self.last_dispense = result
         self._last_slot = result.slot_id
         logger.info(
@@ -177,20 +193,33 @@ class HttpArmClient:
                 request_id=rid,
                 object=ObjectRef(label=label, kind_hint=kind_hint or None),
                 destination=destination or "bowl",
+                timeout_seconds=self.timeout_s,
                 dry_run=self.dry_run,
             )
             try:
                 raw = self._post(MOVE_OBJECT_PATH, cmd.to_json())
                 result = MoveObjectResult.from_dict(raw, fallback_request_id=rid)
             except RuntimeError as exc:
+                if _is_timeout_error(exc):
+                    result = MoveObjectResult(
+                        request_id=rid,
+                        ok=False,
+                        final_state="failed",
+                        detect_detail="timeout",
+                        error=(
+                            f"arm timed out after {self.timeout_s:.0f}s looking for "
+                            f"{label!r} (object missing or not recognized)"
+                        ),
+                    )
                 # Arm returns HTTP 404 {"error":"not found"} when the path is missing.
-                if "HTTP 404" not in str(exc):
+                elif "HTTP 404" not in str(exc):
                     raise
-                logger.info(
-                    "arm /v1/move_object not found; falling back to /v1/dispense for %r",
-                    label,
-                )
-                result = self._move_via_dispense(label=label, request_id=rid)
+                else:
+                    logger.info(
+                        "arm /v1/move_object not found; falling back to /v1/dispense for %r",
+                        label,
+                    )
+                    result = self._move_via_dispense(label=label, request_id=rid)
         self.last_move = result
         logger.info(
             "arm move_object_result request_id=%s ok=%s state=%s label=%s",
@@ -257,6 +286,11 @@ class HttpArmClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:  # noqa: S310 — URL validated
                 raw = resp.read(2_000_000)
+        except TimeoutError as exc:
+            logger.error("arm POST timed out after %.0fs at %s", self.timeout_s, url)
+            raise RuntimeError(
+                f"arm timed out after {self.timeout_s:.0f}s at {url}"
+            ) from exc
         except urllib.error.HTTPError as exc:
             err_body = ""
             try:
@@ -266,8 +300,19 @@ class HttpArmClient:
             logger.error("arm POST failed HTTP %s at %s: %s", exc.code, url, err_body or exc.reason)
             raise RuntimeError(f"arm HTTP {exc.code} at {url}: {err_body or exc.reason}") from exc
         except urllib.error.URLError as exc:
-            logger.error("arm unreachable at %s: %s", url, exc.reason)
-            raise RuntimeError(f"arm unreachable at {url}: {exc.reason}") from exc
+            reason = exc.reason
+            if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+                logger.error("arm POST timed out after %.0fs at %s", self.timeout_s, url)
+                raise RuntimeError(
+                    f"arm timed out after {self.timeout_s:.0f}s at {url}"
+                ) from exc
+            logger.error("arm unreachable at %s: %s", url, reason)
+            raise RuntimeError(f"arm unreachable at {url}: {reason}") from exc
         parsed = parse_json_body(raw)
         logger.info("arm response %s ← %s", path, parsed)
         return parsed
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "timed out" in text or "timeout" in text

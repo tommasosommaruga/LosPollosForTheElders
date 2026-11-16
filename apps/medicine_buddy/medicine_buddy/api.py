@@ -109,6 +109,7 @@ class MedicineBuddyService(
         self._arm_job_lock = threading.Lock()
         self._arm_job_busy = False
         self._arm_job_label: str | None = None
+        self._arm_job_gen = 0  # bumped on start/force-release so a stale job can't clear a new one
 
     def announce_progress(self, text: str) -> bool:
         """Best-effort spoken line. Skips if a tool is still pending (HF realtime rule)."""
@@ -143,6 +144,39 @@ class MedicineBuddyService(
     def arm_job_busy(self) -> bool:
         with self._arm_job_lock:
             return bool(self._arm_job_busy)
+
+    def arm_job_status(self) -> dict[str, Any]:
+        with self._arm_job_lock:
+            return {
+                "busy": bool(self._arm_job_busy),
+                "label": self._arm_job_label,
+                "generation": self._arm_job_gen,
+            }
+
+    def release_arm_job(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Force-clear arm_busy so the next dispense can start (stuck object / hung search).
+
+        The background HTTP call may still finish later; its finally only clears busy if
+        this generation still owns the lock.
+        """
+        del body  # settings POST shape
+        with self._arm_job_lock:
+            was_busy = bool(self._arm_job_busy)
+            label = self._arm_job_label
+            self._arm_job_gen += 1
+            self._arm_job_busy = False
+            self._arm_job_label = None
+        msg = (
+            f"Freed the arm lock (was busy with {label}). You can ask for something else now."
+            if was_busy and label
+            else (
+                "Freed the arm lock — you can ask for something else now."
+                if was_busy
+                else "Arm was already free."
+            )
+        )
+        logger.warning("release_arm_job: was_busy=%s label=%s", was_busy, label)
+        return {"ok": True, "was_busy": was_busy, "label": label, "message": msg, "speak_hint": msg}
 
     def family_page(self) -> str:
         return render_family_page(self.settings_token)
@@ -184,6 +218,7 @@ class MedicineBuddyService(
             "demo_smooth": self.demo_smooth(),
             "arm_async": self.arm_async_enabled(),
             "arm_busy": self.arm_job_busy(),
+            "arm_job": self.arm_job_status(),
             "service": "medicine-buddy",
             "version": __version__,
         }
@@ -635,14 +670,19 @@ class MedicineBuddyService(
         if remote is not None and not wait_sync:
             with self._arm_job_lock:
                 if self._arm_job_busy:
+                    busy_label = self._arm_job_label or "another item"
                     return {
                         "status": "arm_busy",
                         "medicine": {"id": medicine_id, "name": medicine_name},
+                        "busy_with": busy_label,
                         "speak_hint": (
-                            f"The arm is still busy with {self._arm_job_label or 'another item'}. "
-                            "I'll tell you when it's free — keep talking with me in the meantime."
+                            f"The arm is still looking for {busy_label}. "
+                            "Keep talking with me — if that object is gone, use Free arm on the "
+                            "Debug page, or wait until the search times out."
                         ),
                     }
+                self._arm_job_gen += 1
+                job_gen = self._arm_job_gen
                 self._arm_job_busy = True
                 self._arm_job_label = medicine_name
             threading.Thread(
@@ -653,19 +693,23 @@ class MedicineBuddyService(
                     "person_name": person_name,
                     "stop_after_placed": stop_after_placed,
                     "remote": remote,
+                    "job_gen": job_gen,
                 },
                 name=f"arm-dose-{medicine_id}",
                 daemon=True,
             ).start()
+            timeout_s = float(getattr(self.config, "arm_timeout_seconds", 90.0) or 90.0)
             return {
                 "status": "arm_working",
                 "async": True,
                 "arm_remote": True,
                 "demo_mode": False,
                 "medicine": {"id": medicine_id, "name": medicine_name},
+                "arm_timeout_s": timeout_s,
                 "speak_hint": (
                     f"Okay — I'm asking the arm to bring your {medicine_name} now. "
-                    "Keep talking with me while it works; I'll tell you when it's in the bowl."
+                    "Keep talking with me while it works; I'll tell you when it's in the bowl "
+                    f"(or if it can't find it within about {timeout_s:.0f} seconds)."
                 ),
             }
 
@@ -686,8 +730,10 @@ class MedicineBuddyService(
         person_name: str | None,
         stop_after_placed: bool,
         remote: HttpArmClient,
+        job_gen: int,
     ) -> None:
         """Background: POST /v1/dispense, then speak the result so conversation stays free."""
+        hint: str | None = None
         try:
             result = self._run_dose_sync(
                 medicine_id=medicine_id,
@@ -698,21 +744,21 @@ class MedicineBuddyService(
                 arm_unreachable=False,
                 announce_start=False,
             )
-            hint = str(result.get("speak_hint") or "").strip()
-            if hint:
+            raw_hint = str(result.get("speak_hint") or "").strip()
+            if raw_hint:
                 # Drop "call mark_dose_taken" coach lines for ambient announce — keep it short.
-                short = hint.split("Then ask")[0].split("After they")[0].strip()
-                # Wait until no tool is pending — never conversation.say during pending tools.
-                self.announce_when_idle(short or hint)
+                hint = raw_hint.split("Then ask")[0].split("After they")[0].strip() or raw_hint
         except Exception as exc:  # noqa: BLE001 — never leave busy flag stuck
             logger.exception("Background arm dose failed for %s", medicine_name)
-            self.announce_when_idle(
-                f"Sorry — the arm request for {medicine_name} failed. {exc}"
-            )
+            hint = f"Sorry — the arm request for {medicine_name} failed. {exc}"
         finally:
+            # Unlock before TTS so the next dispense isn't blocked by speak_when_idle retries.
             with self._arm_job_lock:
-                self._arm_job_busy = False
-                self._arm_job_label = None
+                if self._arm_job_gen == job_gen:
+                    self._arm_job_busy = False
+                    self._arm_job_label = None
+        if hint:
+            self.announce_when_idle(hint)
 
     def _run_dose_sync(
         self,
@@ -725,25 +771,30 @@ class MedicineBuddyService(
         arm_unreachable: bool,
         announce_start: bool = True,
     ) -> dict[str, Any]:
-        """Run the dose state machine and build the tool/announce payload."""
+        """Run the dose state machine and build the tool/announce payload.
+
+        Does not hold ``self._lock`` during the arm HTTP wait — otherwise every other
+        API call (including arm_busy checks) blocks for the full search timeout.
+        """
+        buddy = SilentBuddy(confirm=True, adherence_taken=None)
+        vision = FakeVision(self.config)
+        arm: FakeArm | HttpArmClient = remote if remote is not None else FakeArm()
+        if remote is not None and announce_start:
+            self.announce_progress(
+                f"Okay — I'm asking the arm to bring your {medicine_name} now. "
+                "One moment."
+            )
+        adherence = FakeAdherence(buddy, auto_taken=None)
+        machine = DoseStateMachine(
+            self.db, buddy, vision, arm, adherence, self.config
+        )
+        # Arm locate/pick may run up to arm_timeout_seconds — keep the service lock free.
+        final = machine.run_dose(
+            medicine_id,
+            stop_after_placed=stop_after_placed,
+            person_name=person_name,
+        )
         with self._lock:
-            buddy = SilentBuddy(confirm=True, adherence_taken=None)
-            vision = FakeVision(self.config)
-            arm: FakeArm | HttpArmClient = remote if remote is not None else FakeArm()
-            if remote is not None and announce_start:
-                self.announce_progress(
-                    f"Okay — I'm asking the arm to bring your {medicine_name} now. "
-                    "One moment."
-                )
-            adherence = FakeAdherence(buddy, auto_taken=None)
-            machine = DoseStateMachine(
-                self.db, buddy, vision, arm, adherence, self.config
-            )
-            final = machine.run_dose(
-                medicine_id,
-                stop_after_placed=stop_after_placed,
-                person_name=person_name,
-            )
             events = [
                 {
                     "state": e.state.value,
@@ -1192,6 +1243,7 @@ def make_handler(service: MedicineBuddyService) -> type[BaseHTTPRequestHandler]:
         "/settings/checkins": service.settings_checkins,
         "/settings/activity_nudges": service.settings_activity_nudges,
         "/settings/reset_microphone": service.reset_microphone,
+        "/settings/release_arm": service.release_arm_job,
         "/settings/calendar": service.settings_calendar,
         "/settings/calendar_accept": service.accept_calendar_proposal,
         "/settings/calendar_reject": service.reject_calendar_proposal,

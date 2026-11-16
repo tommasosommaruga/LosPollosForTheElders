@@ -39,6 +39,8 @@ class DispenseCommand:
     medicine: MedicineRef
     slot_hint: int | None = None
     ocr_min_confidence: float = 0.65
+    # Soft deadline for the arm PC: stop searching if the object is gone / never matched.
+    timeout_seconds: float = 60.0
     actions: tuple[str, ...] = ("locate", "pick_to_bowl", "verify_place")
     one_shot_detect: bool = True
     dry_run: bool = False
@@ -53,6 +55,7 @@ class DispenseCommand:
             "medicine": asdict(self.medicine),
             "slot_hint": self.slot_hint,
             "ocr_min_confidence": self.ocr_min_confidence,
+            "timeout_seconds": float(self.timeout_seconds),
             "actions": list(self.actions),
             "one_shot_detect": self.one_shot_detect,
             "dry_run": self.dry_run,
@@ -163,6 +166,7 @@ class MoveObjectCommand:
     request_id: str
     object: ObjectRef
     destination: str = "bowl"
+    timeout_seconds: float = 60.0
     actions: tuple[str, ...] = ("locate", "pick", "place")
     one_shot_detect: bool = True
     dry_run: bool = False
@@ -179,6 +183,7 @@ class MoveObjectCommand:
             "request_id": self.request_id,
             "object": obj,
             "destination": self.destination,
+            "timeout_seconds": float(self.timeout_seconds),
             "actions": list(self.actions),
             "one_shot_detect": self.one_shot_detect,
             "dry_run": self.dry_run,

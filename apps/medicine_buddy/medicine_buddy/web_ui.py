@@ -321,6 +321,7 @@ def attach_web_ui(app: Any, service_or_provider: Any) -> None:
         "activity_nudges": "settings_activity_nudges",
         "demo_smooth": "settings_demo_smooth",
         "reset_microphone": "reset_microphone",
+        "release_arm": "release_arm_job",
         "calendar": "settings_calendar",
         "calendar_accept": "accept_calendar_proposal",
         "calendar_reject": "reject_calendar_proposal",
@@ -808,6 +809,10 @@ def _debug_page(csrf: str, nav: str) -> str:
   <button type=button id=micreset>Reset microphone</button>
   <span class=muted id=micnote>Sets mic to 100% and clears audio buffers (fixes Control volume timeouts).</span>
 </section>
+<section style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+  <button type=button id=armfree>Free arm</button>
+  <span class=muted id=armnote>Clears arm_busy if the arm is stuck searching for a missing object.</span>
+</section>
 <div class=grid>
   <section><h2>App</h2><div class=kv id=app></div></section>
   <section><h2>Voice guard</h2><div class=kv id=guard></div></section>
@@ -878,6 +883,25 @@ $("micreset").addEventListener("click", async () => {{
     $("micnote").className = "bad";
   }}
   $("micreset").disabled = false;
+}});
+$("armfree").addEventListener("click", async () => {{
+  $("armfree").disabled = true;
+  $("armnote").textContent = "Freeing arm lock…";
+  try {{
+    const r = await fetch(P + "/settings/release_arm", {{
+      method: "POST",
+      headers: {{"Content-Type": "application/json", "X-Family-Token": TOKEN}},
+      body: JSON.stringify({{}}),
+    }});
+    const d = await r.json();
+    $("armnote").textContent = d.message || d.error || (d.ok ? "Arm freed." : "Free failed.");
+    $("armnote").className = d.ok ? "ok" : "bad";
+  }} catch (e) {{
+    $("armnote").textContent = "Free failed — is Medicine Buddy up?";
+    $("armnote").className = "bad";
+  }}
+  $("armfree").disabled = false;
+  refresh();
 }});
 refresh(); setInterval(refresh, 3000);
 </script></main></body></html>"""

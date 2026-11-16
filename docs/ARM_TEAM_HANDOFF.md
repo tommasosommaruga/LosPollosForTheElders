@@ -6,8 +6,10 @@ Medicine Buddy (Reachy) asks the person to confirm, then sends **standardized JS
 
 ```bash
 MEDICINE_BUDDY_ARM_URL=http://<arm-pc-ip>:9090
-# MEDICINE_BUDDY_ARM_TIMEOUT_S=90
+# MEDICINE_BUDDY_ARM_TIMEOUT_S=90   # Buddy HTTP + JSON timeout_seconds; stop searching when exceeded
 ```
+
+Dispense/move JSON includes `timeout_seconds`. If the labeled object is gone, return `ok: false` / `final_state: failed` within that budget — do not search forever (Buddy also aborts the HTTP wait).
 
 If `ARM_URL` is empty, Buddy keeps `FakeArm` (demo).
 

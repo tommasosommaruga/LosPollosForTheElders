@@ -193,24 +193,43 @@ class RpcSpeaker:
             self.state, self.last_event = "thinking", self._clock()
         return True
 
-    def speak_progress(self, text: str) -> bool:
-        """Speak during a long in-flight tool (arm wait). Bypasses pending_tools gate.
+    def speak(self, text: str) -> bool:
+        """Alias for ``self(text)`` — speak only when Reachy is idle."""
+        return self(text)
 
-        Used so the person hears "I'm asking the arm now…" while HTTP to the arm PC
-        is still blocking. Best-effort; never raises.
+    def speak_progress(self, text: str) -> bool:
+        """Best-effort line while waiting. Never calls say() if a tool is still pending.
+
+        HuggingFace realtime rejects new replies with
+        "Cannot generate a response while function call outputs are pending" — so we
+        must NOT bypass the pending_tools gate (unlike an earlier mistaken version).
         """
         line = " ".join(str(text or "").split())
         if not line:
             return False
-        try:
-            ok = _say_once(self.url, line, self.timeout)
-        except Exception as exc:  # noqa: BLE001 — progress must not break the arm call
-            logger.warning("speak_progress failed: %s", exc)
+        with self._lock:
+            if self.pending_tools > 0:
+                logger.debug("speak_progress skipped: %d tool call(s) still pending", self.pending_tools)
+                return False
+        return self.speak(line)
+
+    def speak_when_idle(
+        self,
+        text: str,
+        *,
+        attempts: int = 40,
+        delay_s: float = 1.5,
+    ) -> bool:
+        """Retry speak() until Reachy is idle (for background arm-done announcements)."""
+        line = " ".join(str(text or "").split())
+        if not line:
             return False
-        if ok:
-            with self._lock:
-                self.state, self.last_event = "speaking", self._clock()
-        return ok
+        for _ in range(max(1, int(attempts))):
+            if self.speak(line):
+                return True
+            time.sleep(max(0.2, float(delay_s)))
+        logger.warning("speak_when_idle gave up after %s tries: %s", attempts, line[:80])
+        return False
 
     def status(self) -> dict[str, Any]:
         with self._lock:

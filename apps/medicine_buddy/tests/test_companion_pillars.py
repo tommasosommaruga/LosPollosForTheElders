@@ -116,6 +116,8 @@ def test_profile_lists_new_tools() -> None:
     assert "start_family_call" in profile
     assert "suggest_activity" in profile
     assert "encourage self-care" in profile.lower()
+    # volume_control hangs on mic-set timeouts and leaves HF with pending tool outputs
+    assert "volume_control" not in profile
 
 
 def test_encourage_self_care_toggle_persists(svc: MedicineBuddyService) -> None:

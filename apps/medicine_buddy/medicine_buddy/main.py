@@ -90,6 +90,10 @@ import asyncio  # noqa: E402
 from reachy_mini import ReachyMini, ReachyMiniApp  # noqa: E402
 from reachy_mini_conversation_app import main as conversation  # noqa: E402
 from reachy_mini_conversation_app.conversation_handler import ConversationHandler  # noqa: E402
+from reachy_mini_conversation_app.profile_toolsets import (  # noqa: E402
+    read_profile_tool_names,
+    write_profile_tool_override,
+)
 
 from medicine_buddy.api import MedicineBuddyService, start_server  # noqa: E402
 from medicine_buddy.calendar_service import CalendarSyncLoop  # noqa: E402
@@ -102,6 +106,34 @@ from medicine_buddy.wake import start_wake_greeting  # noqa: E402
 from medicine_buddy.web_ui import attach_web_ui  # noqa: E402
 
 _SERVICE: MedicineBuddyService | None = None
+_BLOCKED_PROFILE_TOOLS = frozenset({"volume_control"})
+
+
+def _sync_profile_tools_without_volume(instance_path: str) -> None:
+    """Strip volume_control from the robot's persisted tool override (if present).
+
+    profile.md already omits it, but an older Control-UI override can still enable it.
+    That tool hangs on mic-set timeouts and leaves HF with pending function outputs.
+    """
+    try:
+        tools = read_profile_tool_names(PROFILE, instance_path)
+    except Exception as exc:  # noqa: BLE001 — boot must continue even if toolsets are corrupt
+        logger.warning("Could not read profile tools for %s: %s", PROFILE, exc)
+        return
+    blocked = [name for name in tools if name in _BLOCKED_PROFILE_TOOLS]
+    if not blocked:
+        return
+    cleaned = [name for name in tools if name not in _BLOCKED_PROFILE_TOOLS]
+    try:
+        write_profile_tool_override(PROFILE, cleaned, instance_path)
+        logger.info(
+            "Removed %s from %s tool override (%d tools left)",
+            ", ".join(blocked),
+            PROFILE,
+            len(cleaned),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not write profile tool override: %s", exc)
 
 
 def _install_transcript_hook() -> None:
@@ -148,6 +180,9 @@ class MedicineBuddy(ReachyMiniApp):
         asyncio.set_event_loop(asyncio.new_event_loop())
         args, _ = conversation.parse_args()
         instance_path = str(conversation.resolve_instance_path(self._get_instance_path().parent))
+        # Persisted tool overrides on the robot can still enable volume_control; that tool
+        # hangs on mic-set timeouts and leaves HF with "function call outputs are pending".
+        _sync_profile_tools_without_volume(instance_path)
         conversation.run(args, robot=reachy_mini, app_stop_event=stop_event,
                          settings_app=self.settings_app, instance_path=instance_path)
 
@@ -213,7 +248,9 @@ class MedicineBuddy(ReachyMiniApp):
             speaker = RpcSpeaker(f"ws://127.0.0.1:{ui_port}/rpc")
             speaker.start()
         if speaker is not None:
+            # progress: never say() while tools pending; completion: retry until idle
             service.progress_speaker = speaker.speak_progress
+            service.completion_speaker = speaker.speak_when_idle
         logger.info("Medicine Buddy API on http://%s:%d  (status page /, family settings /family)", host, port)
         logger.info("In-app pages (open by default): http://<this-machine>:7860/medicine")
         arm_url = (service.config.arm_url or "").strip()

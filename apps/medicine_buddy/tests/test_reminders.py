@@ -453,6 +453,39 @@ def test_urgent_line_still_waits_for_a_running_tool_call(watcher) -> None:
     assert sp.speak_urgent("take your aspirin") is False and state["said"] == []
 
 
+def test_speak_progress_skips_while_tool_pending(watcher) -> None:
+    """HF rejects say() while function outputs are pending — progress must not bypass that."""
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    state["rpc"].broadcast_threadsafe("conversation.activity", {"reason": "tool_call_received"})
+    assert _wait(lambda: sp.pending_tools == 1)
+    assert sp.speak_progress("asking the arm now") is False and state["said"] == []
+    state["rpc"].broadcast_threadsafe("conversation.activity", {"reason": "tool_result_ready"})
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    assert _wait(lambda: sp.pending_tools == 0 and sp.is_idle())
+    assert sp.speak_progress("asking the arm now") is True
+    assert state["said"] == ["asking the arm now"]
+
+
+def test_speak_when_idle_retries_until_ready(watcher) -> None:
+    sp, state = watcher
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "thinking"})
+    assert _wait(lambda: sp.state == "thinking")
+
+    result: list[bool] = []
+
+    def _run() -> None:
+        result.append(sp.speak_when_idle("arm done", attempts=20, delay_s=0.05))
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    time.sleep(0.15)
+    assert state["said"] == []
+    state["rpc"].broadcast_threadsafe("conversation.turn", {"state": "ready"})
+    thread.join(timeout=3)
+    assert result == [True] and state["said"] == ["arm done"]
+
+
 def test_loop_uses_the_urgent_path(parts) -> None:
     svc, loop, speaker, _ = parts
     used: list[str] = []

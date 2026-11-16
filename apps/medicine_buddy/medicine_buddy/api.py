@@ -102,15 +102,16 @@ class MedicineBuddyService(
         self._init_debug()
         self._init_transcript()
         self._init_listen_mode()
-        # Set from main.py to RpcSpeaker.speak_progress — live TTS while arm HTTP blocks
-        # or when a background arm job finishes.
+        # Set from main.py: progress_speaker must not talk over pending tools;
+        # completion_speaker waits until Reachy is idle (arm-done announce).
         self.progress_speaker: Callable[[str], bool] | None = None
+        self.completion_speaker: Callable[[str], bool] | None = None
         self._arm_job_lock = threading.Lock()
         self._arm_job_busy = False
         self._arm_job_label: str | None = None
 
     def announce_progress(self, text: str) -> bool:
-        """Best-effort spoken line while a long arm call is in flight / after async done."""
+        """Best-effort spoken line. Skips if a tool is still pending (HF realtime rule)."""
         line = " ".join(str(text or "").split())
         if not line or self.progress_speaker is None:
             return False
@@ -118,6 +119,20 @@ class MedicineBuddyService(
             return bool(self.progress_speaker(line))
         except Exception as exc:  # noqa: BLE001 — never fail the arm path for TTS
             logger.warning("announce_progress failed: %s", exc)
+            return False
+
+    def announce_when_idle(self, text: str) -> bool:
+        """Speak after tools finish — used when a background arm job completes."""
+        line = " ".join(str(text or "").split())
+        if not line:
+            return False
+        speaker = self.completion_speaker or self.progress_speaker
+        if speaker is None:
+            return False
+        try:
+            return bool(speaker(line))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("announce_when_idle failed: %s", exc)
             return False
 
     def arm_async_enabled(self) -> bool:
@@ -687,10 +702,11 @@ class MedicineBuddyService(
             if hint:
                 # Drop "call mark_dose_taken" coach lines for ambient announce — keep it short.
                 short = hint.split("Then ask")[0].split("After they")[0].strip()
-                self.announce_progress(short or hint)
+                # Wait until no tool is pending — never conversation.say during pending tools.
+                self.announce_when_idle(short or hint)
         except Exception as exc:  # noqa: BLE001 — never leave busy flag stuck
             logger.exception("Background arm dose failed for %s", medicine_name)
-            self.announce_progress(
+            self.announce_when_idle(
                 f"Sorry — the arm request for {medicine_name} failed. {exc}"
             )
         finally:
